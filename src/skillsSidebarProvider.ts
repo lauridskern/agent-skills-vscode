@@ -816,7 +816,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
         <div class="tabs">
             <button class="tab active" data-panel="installed">Installed</button>
-            <button class="tab" data-panel="marketplace">Marketplace</button>
+            <button class="tab" data-panel="marketplace">Browse</button>
         </div>
     </div>
 
@@ -866,7 +866,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
             if (items.length === 0) {
                 installedList.innerHTML = '<div class="empty-state">' + 
-                    (searchQuery ? 'No matching skills found.' : 'No skills installed.<br><br>Switch to Marketplace to browse and install skills.') + 
+                    (searchQuery ? 'No matching skills found.' : 'No skills installed.<br><br>Switch to Browse to discover and install skills.') + 
                 '</div>';
                 return;
             }

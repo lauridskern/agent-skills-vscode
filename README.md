@@ -6,7 +6,7 @@ Browse, install, and manage Agent Skills for AI coding agents directly from VS C
 
 ## Features
 
-### Browse the Marketplace
+### Browse Skills
 
 Discover skills from [skills.sh](https://skills.sh), an open directory of agent skills powered by Vercel. Search and filter through hundreds of community-created skills.
 
@@ -45,7 +45,7 @@ Or install from the [VS Code Marketplace](https://marketplace.visualstudio.com/i
 ## Usage
 
 1. Click the **sparkle icon** in the Activity Bar to open Agent Skills
-2. Browse the **Marketplace** tab to discover skills
+2. Browse the **Browse** tab to discover skills
 3. Click **Install** on any skill
 4. Select your target agents, scope, and installation method
 5. View and manage your skills in the **Installed** tab

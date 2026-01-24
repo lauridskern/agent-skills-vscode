@@ -6,12 +6,12 @@ All notable changes to the Agent Skills extension will be documented in this fil
 
 ### Added
 - Initial release
-- Browse skills from skills.sh marketplace
+- Browse skills from skills.sh directory
 - Install skills to Cursor, Claude Code, Codex, Gemini CLI, OpenCode, and Antigravity
 - Project-level and global installation scopes
 - Symlink and copy installation methods
 - View and manage installed skills
 - Search and filter skills
 - Reinstall and remove functionality
-- Cached marketplace results for faster loading
+- Cached browse results for faster loading
 - Telemetry opt-in/opt-out during installation
