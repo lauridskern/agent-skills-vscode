@@ -1,6 +1,6 @@
 {
   "name": "agent-skills-browser",
-  "displayName": "Agent Skills Browser",
+  "displayName": "Agent Skills Manager",
   "description": "Browse, install, and manage Agent Skills for AI coding agents like Cursor, Claude Code, Codex, and more",
   "version": "0.1.1",
   "publisher": "laurids",
