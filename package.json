@@ -1,0 +1,80 @@
+{
+  "name": "agent-skills-manager",
+  "displayName": "Agent Skills Manager",
+  "description": "Manage and install Agent Skills for AI coding agents",
+  "version": "0.0.1",
+  "publisher": "agent-skills",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:agentSkillsView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentSkills",
+          "title": "Agent Skills",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentSkills": [
+        {
+          "type": "webview",
+          "id": "agentSkillsView",
+          "name": "Skills"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "agentSkills.refresh",
+        "title": "Refresh Skills",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "agentSkills.installSkill",
+        "title": "Install Skill",
+        "icon": "$(add)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "agentSkills.refresh",
+          "when": "view == agentSkillsView",
+          "group": "navigation"
+        },
+        {
+          "command": "agentSkills.installSkill",
+          "when": "view == agentSkillsView",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "yaml": "^2.3.4"
+  }
+}
