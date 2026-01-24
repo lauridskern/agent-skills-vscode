@@ -1,4 +1,4 @@
-![Agent Skills](https://raw.githubusercontent.com/lauridskern/agent-skills-vscode/main/resources/header.png)
+![Agent Skills](./resources/header.png)
 
 Browse, install, and manage Agent Skills for AI coding agents directly from VS Code.
 
