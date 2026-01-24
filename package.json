@@ -2,7 +2,7 @@
   "name": "agent-skills-manager",
   "displayName": "Agent Skills Manager",
   "description": "Browse, install, and manage Agent Skills for AI coding agents like Cursor, Claude Code, Codex, and more",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "laurids",
   "license": "MIT",
   "repository": {
