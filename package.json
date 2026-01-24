@@ -1,9 +1,9 @@
 {
-  "name": "agent-skills",
+  "name": "agent-skills-browser",
   "displayName": "Agent Skills",
   "description": "Browse, install, and manage Agent Skills for AI coding agents like Cursor, Claude Code, Codex, and more",
   "version": "0.1.1",
-  "publisher": "agent-skills",
+  "publisher": "laurids",
   "license": "MIT",
   "repository": {
     "type": "git",
