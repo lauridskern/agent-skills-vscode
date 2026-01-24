@@ -2,7 +2,7 @@
   "name": "agent-skills",
   "displayName": "Agent Skills",
   "description": "Browse, install, and manage Agent Skills for AI coding agents like Cursor, Claude Code, Codex, and more",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "agent-skills",
   "license": "MIT",
   "repository": {
