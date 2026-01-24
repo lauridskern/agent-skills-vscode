@@ -1,15 +1,39 @@
 {
-  "name": "agent-skills-manager",
-  "displayName": "Agent Skills Manager",
-  "description": "Manage and install Agent Skills for AI coding agents",
+  "name": "agent-skills",
+  "displayName": "Agent Skills",
+  "description": "Browse, install, and manage Agent Skills for AI coding agents like Cursor, Claude Code, Codex, and more",
   "version": "0.0.1",
   "publisher": "agent-skills",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lauridskern/agent-skills-vscode"
+  },
+  "homepage": "https://github.com/lauridskern/agent-skills-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/lauridskern/agent-skills-vscode/issues"
+  },
+  "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": [
-    "Other"
+  "keywords": [
+    "ai",
+    "agent",
+    "skills",
+    "cursor",
+    "claude",
+    "codex",
+    "coding assistant"
   ],
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
   "activationEvents": [
     "onView:agentSkillsView"
   ],
@@ -20,7 +44,7 @@
         {
           "id": "agentSkills",
           "title": "Agent Skills",
-          "icon": "resources/icon.svg"
+          "icon": "$(sparkle)"
         }
       ]
     },
@@ -29,7 +53,7 @@
         {
           "type": "webview",
           "id": "agentSkillsView",
-          "name": "Skills"
+          "name": "Agent Skills"
         }
       ]
     },
@@ -61,7 +85,7 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "bun run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts"
@@ -75,6 +99,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@vscode/codicons": "^0.0.44",
     "yaml": "^2.3.4"
   }
 }

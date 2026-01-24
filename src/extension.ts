@@ -3,10 +3,8 @@ import { SkillsSidebarProvider } from './skillsSidebarProvider';
 import { SkillInstaller } from './skillInstaller';
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('[Agent Skills] Extension activating...');
-    
-    const skillInstaller = new SkillInstaller();
-    const sidebarProvider = new SkillsSidebarProvider(context.extensionUri, skillInstaller);
+    const skillInstaller = new SkillInstaller(context);
+    const sidebarProvider = new SkillsSidebarProvider(context.extensionUri, skillInstaller, context);
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
@@ -19,8 +17,6 @@ export function activate(context: vscode.ExtensionContext) {
             }
         )
     );
-    
-    console.log('[Agent Skills] Extension activated successfully');
 
     context.subscriptions.push(
         vscode.commands.registerCommand('agentSkills.refresh', () => {

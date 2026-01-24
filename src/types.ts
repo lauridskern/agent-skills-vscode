@@ -1,6 +1,12 @@
 export type SkillLevel = 'project' | 'user';
 
-export type CompatibilityMode = 'cursor' | 'claude' | 'codex';
+export type CompatibilityMode =
+    'cursor' |
+    'claude' |
+    'codex' |
+    'gemini' |
+    'opencode' |
+    'agent';
 
 export interface Skill {
     name: string;
@@ -8,6 +14,7 @@ export interface Skill {
     path: string;
     level: SkillLevel;
     mode: CompatibilityMode;
+    updatedAt?: number;
 }
 
 export interface SkillDirectory {
@@ -20,16 +27,25 @@ export const SKILL_DIRECTORIES: Omit<SkillDirectory, 'path'>[] = [
     { level: 'project', mode: 'cursor' },
     { level: 'project', mode: 'claude' },
     { level: 'project', mode: 'codex' },
+    { level: 'project', mode: 'gemini' },
+    { level: 'project', mode: 'opencode' },
+    { level: 'project', mode: 'agent' },
     { level: 'user', mode: 'cursor' },
     { level: 'user', mode: 'claude' },
-    { level: 'user', mode: 'codex' }
+    { level: 'user', mode: 'codex' },
+    { level: 'user', mode: 'gemini' },
+    { level: 'user', mode: 'opencode' },
+    { level: 'user', mode: 'agent' }
 ];
 
 export function getSkillDirectoryPath(level: SkillLevel, mode: CompatibilityMode, workspaceRoot?: string): string {
     const modeToFolder: Record<CompatibilityMode, string> = {
         cursor: '.cursor',
         claude: '.claude',
-        codex: '.codex'
+        codex: '.codex',
+        gemini: '.gemini',
+        opencode: '.opencode',
+        agent: '.agent'
     };
 
     const folder = modeToFolder[mode];
@@ -49,7 +65,10 @@ export function getModeDisplayName(mode: CompatibilityMode): string {
     const names: Record<CompatibilityMode, string> = {
         cursor: 'Cursor',
         claude: 'Claude',
-        codex: 'Codex'
+        codex: 'Codex',
+        gemini: 'Gemini CLI',
+        opencode: 'OpenCode',
+        agent: 'Antigravity'
     };
     return names[mode];
 }
@@ -62,7 +81,10 @@ export function getAgentFlag(mode: CompatibilityMode): string {
     const flags: Record<CompatibilityMode, string> = {
         cursor: 'cursor',
         claude: 'claude-code',
-        codex: 'codex'
+        codex: 'codex',
+        gemini: 'gemini',
+        opencode: 'opencode',
+        agent: 'openhands'
     };
     return flags[mode];
 }

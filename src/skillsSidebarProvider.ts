@@ -12,8 +12,18 @@ interface MarketplaceSkill {
   url: string;
 }
 
+interface CachedData<T> {
+  data: T;
+  timestamp: number;
+}
+
+const CACHE_KEY_MARKETPLACE = "cachedMarketplaceSkills";
+const CACHE_KEY_INSTALLED = "cachedInstalledSkills";
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
 export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "agentSkillsView";
+  private readonly _context: vscode.ExtensionContext;
   private _view?: vscode.WebviewView;
   private _installer: SkillInstaller;
   private _installedSkills: Skill[] = [];
@@ -24,16 +34,17 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly _extensionUri: vscode.Uri,
     installer: SkillInstaller,
+    context: vscode.ExtensionContext,
   ) {
     this._installer = installer;
+    this._context = context;
   }
 
-  public resolveWebviewView(
+  public async resolveWebviewView(
     webviewView: vscode.WebviewView,
     context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken,
   ) {
-    console.log("[Agent Skills] Resolving webview view...");
     this._view = webviewView;
 
     webviewView.webview.options = {
@@ -41,13 +52,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this._extensionUri],
     };
 
-    this._refreshInstalledSkills();
-    console.log(
-      "[Agent Skills] Found",
-      this._installedSkills.length,
-      "installed skills",
-    );
+    this._loadFromCache();
     this._updateWebview();
+    
+    this._refreshInstalledSkills().then(() => {
+      this._updateWebview();
+    });
     this._fetchMarketplaceSkills();
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
@@ -62,45 +72,76 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
           await this._deleteSkill(message.path, message.name);
           break;
         case "refresh":
-          this._refreshInstalledSkills();
-          await this._fetchMarketplaceSkills();
+          await this._refreshInstalledSkills();
+          await this._fetchMarketplaceSkills(true);
           break;
         case "openExternal":
           vscode.env.openExternal(vscode.Uri.parse(message.url));
+          break;
+        case "openUrl":
+          vscode.commands.executeCommand('simpleBrowser.show', message.url);
           break;
       }
     });
   }
 
-  public refresh() {
-    this._refreshInstalledSkills();
+  public async refresh() {
+    await this._refreshInstalledSkills();
     this._updateWebview();
   }
 
-  private _refreshInstalledSkills() {
-    this._installedSkills = scanAllSkills();
+  private _loadFromCache() {
+    const cachedInstalled = this._context.globalState.get<CachedData<Skill[]>>(CACHE_KEY_INSTALLED);
+    if (cachedInstalled?.data) {
+      this._installedSkills = cachedInstalled.data;
+    }
+
+    const cachedMarketplace = this._context.globalState.get<CachedData<MarketplaceSkill[]>>(CACHE_KEY_MARKETPLACE);
+    if (cachedMarketplace?.data) {
+      this._marketplaceSkills = cachedMarketplace.data;
+    }
   }
 
-  private async _fetchMarketplaceSkills() {
+  private async _refreshInstalledSkills() {
+    this._installedSkills = await scanAllSkills();
+    this._context.globalState.update(CACHE_KEY_INSTALLED, {
+      data: this._installedSkills,
+      timestamp: Date.now()
+    } as CachedData<Skill[]>);
+  }
+
+  private async _fetchMarketplaceSkills(forceRefresh = false) {
     if (this._isLoadingMarketplace) return;
+    
+    if (!forceRefresh) {
+      const cached = this._context.globalState.get<CachedData<MarketplaceSkill[]>>(CACHE_KEY_MARKETPLACE);
+      const isCacheValid = cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS;
+      
+      if (isCacheValid && this._marketplaceSkills.length > 0) {
+        this._isLoadingMarketplace = false;
+        return;
+      }
+    }
+
     this._isLoadingMarketplace = true;
     this._marketplaceError = null;
-    this._updateWebview();
+    if (this._marketplaceSkills.length === 0) {
+      this._updateWebview();
+    }
 
     try {
       const html = await this._httpGet("https://skills.sh/");
-      console.log("[Agent Skills] Fetched HTML length:", html.length);
       this._marketplaceSkills = this._parseSkillsFromHtml(html);
-      console.log(
-        "[Agent Skills] Parsed skills count:",
-        this._marketplaceSkills.length,
-      );
       if (this._marketplaceSkills.length === 0) {
         this._marketplaceError = "No skills found in response. Try refreshing.";
+      } else {
+        this._context.globalState.update(CACHE_KEY_MARKETPLACE, {
+          data: this._marketplaceSkills,
+          timestamp: Date.now()
+        } as CachedData<MarketplaceSkill[]>);
       }
     } catch (error: any) {
       this._marketplaceError = `Failed to load: ${error?.message || error}`;
-      console.error("[Agent Skills] Failed to fetch marketplace:", error);
     }
 
     this._isLoadingMarketplace = false;
@@ -229,14 +270,80 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _handleInstall(repo: string, skillName?: string) {
+    const agentItems: vscode.QuickPickItem[] = [
+      { label: "Antigravity", description: ".agent/skills/" },
+      { label: "Claude Code", description: ".claude/skills/" },
+      { label: "Codex", description: ".codex/skills/" },
+      { label: "Cursor", description: ".cursor/skills/" },
+      { label: "Gemini CLI", description: ".gemini/skills/" },
+      { label: "OpenCode", description: ".opencode/skills/" },
+    ];
+
+    const modeMap: Record<string, CompatibilityMode | undefined> = {
+      Cursor: "cursor",
+      "Claude Code": "claude",
+      Codex: "codex",
+      "Gemini CLI": "gemini",
+      OpenCode: "opencode",
+      Antigravity: "agent",
+    };
+
+    const lastSelected = this._context.globalState.get<CompatibilityMode[]>(
+      "agentSkills.lastSelectedAgents",
+      [],
+    );
+
+    const agentSelection = await new Promise<vscode.QuickPickItem[] | undefined>(
+      (resolve) => {
+        const quickPick = vscode.window.createQuickPick();
+        let accepted = false;
+
+        quickPick.title = "Select agents to install skills to";
+        quickPick.canSelectMany = true;
+        quickPick.items = agentItems;
+        quickPick.selectedItems = agentItems.filter((item) => {
+          const mode = modeMap[item.label];
+          return Boolean(mode && lastSelected.includes(mode));
+        });
+
+        quickPick.onDidAccept(() => {
+          accepted = true;
+          const selection = [...quickPick.selectedItems];
+          quickPick.hide();
+          resolve(selection);
+        });
+
+        quickPick.onDidHide(() => {
+          if (!accepted) {
+            resolve(undefined);
+          }
+          quickPick.dispose();
+        });
+
+        quickPick.show();
+      },
+    );
+
+    if (!agentSelection || agentSelection.length === 0) return;
+
+    const modes = agentSelection
+      .map((item) => modeMap[item.label])
+      .filter((mode): mode is CompatibilityMode => Boolean(mode));
+
+    if (modes.length === 0) {
+      vscode.window.showWarningMessage("Selected agents are not supported yet.");
+      return;
+    }
+
+    void this._context.globalState.update("agentSkills.lastSelectedAgents", modes);
+
     const levelItems: vscode.QuickPickItem[] = [
       { label: "Project", description: "Install to current workspace" },
       { label: "User (Global)", description: "Install to user directory" },
     ];
 
     const levelSelection = await vscode.window.showQuickPick(levelItems, {
-      title: "Select Installation Level",
-      placeHolder: "Where should the skill be installed?",
+      title: "Installation scope",
     });
 
     if (!levelSelection) return;
@@ -244,36 +351,46 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     const level: SkillLevel =
       levelSelection.label === "Project" ? "project" : "user";
 
-    const modeItems: vscode.QuickPickItem[] = [
-      { label: "Cursor", description: ".cursor/skills/" },
-      { label: "Claude", description: ".claude/skills/" },
-      { label: "Codex", description: ".codex/skills/" },
+    const methodItems: vscode.QuickPickItem[] = [
+      { label: "Symlink (Recommended)", description: "Single source of truth, easy updates" },
+      { label: "Copy to all agents", description: "Independent copies for each agent" },
     ];
 
-    const modeSelection = await vscode.window.showQuickPick(modeItems, {
-      title: "Select Compatibility Mode",
-      placeHolder: "Which agent format should be used?",
+    const methodSelection = await vscode.window.showQuickPick(methodItems, {
+      title: "Installation method",
     });
 
-    if (!modeSelection) return;
+    if (!methodSelection) return;
 
-    const modeMap: Record<string, CompatibilityMode> = {
-      Cursor: "cursor",
-      Claude: "claude",
-      Codex: "codex",
-    };
+    const method = methodSelection.label.startsWith("Symlink") ? "symlink" : "copy";
 
-    await this._installer.installWithOptions({
+    const telemetryItems: vscode.QuickPickItem[] = [
+      { label: "No", description: "Do not send anonymous telemetry" },
+      { label: "Yes", description: "Help rank skills on the leaderboard" },
+    ];
+
+    const telemetrySelection = await vscode.window.showQuickPick(telemetryItems, {
+      title: "Enable anonymous telemetry?",
+      placeHolder: "Telemetry only includes skill name and timestamp—no personal data",
+    });
+
+    if (!telemetrySelection) return;
+
+    const enableTelemetry = telemetrySelection.label === "Yes";
+
+    const didInstall = await this._installer.installWithOptionsMultiple({
       repo,
       skillName,
       level,
-      mode: modeMap[modeSelection.label],
+      modes,
+      method: method as "symlink" | "copy",
+      enableTelemetry,
     });
 
-    setTimeout(() => {
-      this._refreshInstalledSkills();
+    if (didInstall) {
+      await this._refreshInstalledSkills();
       this._updateWebview();
-    }, 5000);
+    }
   }
 
   private _openSkill(path: string) {
@@ -293,7 +410,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       try {
         const skillDir = vscode.Uri.file(path.replace(/\/SKILL\.md$/, ""));
         await vscode.workspace.fs.delete(skillDir, { recursive: true });
-        this._refreshInstalledSkills();
+        await this._refreshInstalledSkills();
         this._updateWebview();
         vscode.window.showInformationMessage(`Skill "${name}" deleted.`);
       } catch (error) {
@@ -328,6 +445,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
+    <link href="${codiconsUri}" rel="stylesheet" />
     <title>Agent Skills</title>
     <style>
         :root {
@@ -342,13 +460,23 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             box-sizing: border-box;
         }
         
+        html, body {
+            background: transparent;
+        }
+
         body {
             padding: 0;
             color: var(--vscode-foreground);
             font-size: var(--vscode-font-size);
             font-weight: var(--vscode-font-weight);
             font-family: var(--vscode-font-family);
-            background-color: var(--vscode-sideBar-background);
+        }
+
+        .content {
+            background: var(--vscode-sideBar-background);
+            min-height: 100vh;
+            width: calc(100% - 1px);
+            margin-right: 1px;
         }
 
         input, button {
@@ -401,12 +529,15 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             background: var(--vscode-button-secondaryHoverBackground);
         }
 
-        .search-box {
-            padding: 8px 8px 4px 8px;
+        .header {
             position: sticky;
             top: 0;
-            background: var(--vscode-sideBar-background);
             z-index: 10;
+            background: var(--vscode-sideBar-background);
+        }
+
+        .search-box {
+            padding: 8px 8px 4px 8px;
         }
 
         .tabs {
@@ -414,10 +545,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             padding: 0 8px;
             gap: 0;
             border-bottom: 1px solid var(--vscode-panel-border);
-            position: sticky;
-            top: 36px;
             background: var(--vscode-sideBar-background);
-            z-index: 10;
         }
 
         .tab {
@@ -432,6 +560,10 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
         }
 
         .tab:hover {
@@ -449,6 +581,8 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
         .panel.active {
             display: block;
+            overflow: auto;
+            max-height: calc(100vh - 90px);
         }
 
         .list-header {
@@ -470,8 +604,10 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         }
 
         .list-header .arrow {
+            font-size: 12px;
             margin-right: 4px;
             transition: transform 0.15s;
+            -webkit-text-stroke: 0.5px currentColor;
         }
 
         .list-header.collapsed .arrow {
@@ -497,11 +633,13 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         }
 
         .list-item {
+            position: relative;
             display: flex;
-            padding: 6px 12px;
+            height: 50px;
+            padding: 10px 10px;
+            padding-right: 150px;
             cursor: pointer;
             align-items: flex-start;
-            gap: 10px;
         }
 
         .list-item:hover {
@@ -522,10 +660,16 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
         .item-title {
             font-size: 13px;
-            font-weight: 400;
+            font-weight: 500;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            line-height: 1.3;
+            cursor: pointer;
+        }
+
+        .item-title:hover {
+            text-decoration: underline;
         }
 
         .item-subtitle {
@@ -534,39 +678,88 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            margin-top: 1px;
-        }
-
-        .item-meta {
-            font-size: 10px;
-            color: var(--vscode-descriptionForeground);
-            margin-top: 3px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
+            margin-top: 2px;
+            line-height: 1.3;
         }
 
         .item-actions {
+            position: absolute;
+            right: 10px;
+            top: 8px;
+            bottom: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            justify-content: space-between;
+        }
+
+        .item-meta-top {
+            font-size: 10px;
+            font-weight: 500;
+            color: var(--vscode-descriptionForeground);
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        .item-meta-top .codicon {
+            font-size: 12px;
+        }
+
+        .install-btn {
+            height: 16px;
+            padding: 0 5px;
+            font-size: 11px;
+            font-weight: 500;
+            border-radius: 2px;
+            line-height: 16px;
+        }
+
+        .remove-btn {
+            height: 16px;
+            padding: 0 5px;
+            font-size: 11px;
+            font-weight: 500;
+            border-radius: 2px;
+            line-height: 16px;
+            background: rgba(255, 255, 255, 0.15);
+            border: none;
+            color: var(--vscode-foreground);
+        }
+
+        .remove-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .reinstall-btn {
+            height: 16px;
+            padding: 0 5px;
+            font-size: 11px;
+            font-weight: 500;
+            border-radius: 2px;
+            line-height: 16px;
+            background: rgba(255, 255, 255, 0.15);
+            border: none;
+            color: var(--vscode-foreground);
+        }
+
+        .reinstall-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .item-buttons {
             display: flex;
             gap: 4px;
-            flex-shrink: 0;
+            padding-top: 2px;
         }
 
-        .item-actions button {
-            padding: 3px 8px;
-            font-size: 11px;
+        .list-item.installed-gradient {
+            background: linear-gradient(90deg, transparent 0%, rgba(135, 161, 191, 0.08) 100%);
         }
 
-        .icon-btn {
-            background: none;
-            color: var(--vscode-foreground);
-            padding: 4px;
-            opacity: 0.7;
-        }
-
-        .icon-btn:hover {
-            opacity: 1;
-            background: var(--vscode-toolbar-hoverBackground);
+        .list-item.installed-gradient:hover {
+            background: linear-gradient(90deg, var(--vscode-list-hoverBackground) 0%, rgba(135, 161, 191, 0.15) 100%);
         }
 
         .empty-state {
@@ -586,40 +779,54 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             text-decoration: underline;
         }
 
+        .marketplace-disclaimer {
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            padding: 8px 10px;
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            background: var(--vscode-sideBar-background);
+            border-bottom: 1px solid var(--vscode-widget-border);
+        }
+
+        .marketplace-disclaimer a {
+            color: var(--vscode-textLink-foreground);
+            text-decoration: none;
+        }
+
+        .marketplace-disclaimer a:hover {
+            text-decoration: underline;
+        }
+
         .loading {
             padding: 20px;
             text-align: center;
             color: var(--vscode-descriptionForeground);
         }
 
-        .installed-badge {
-            display: inline-block;
-            padding: 1px 5px;
-            border-radius: 2px;
-            background: var(--vscode-badge-background);
-            color: var(--vscode-badge-foreground);
-            font-size: 9px;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-        }
     </style>
 </head>
 <body>
-    <div class="search-box">
-        <input type="text" id="search" placeholder="Search skills...">
+    <div class="content">
+    <div class="header">
+        <div class="search-box">
+            <input type="text" id="search" placeholder="Search skills...">
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" data-panel="installed">Installed</button>
+            <button class="tab" data-panel="marketplace">Marketplace</button>
+        </div>
     </div>
 
-    <div class="tabs">
-        <button class="tab active" data-panel="installed">Installed</button>
-        <button class="tab" data-panel="marketplace">Marketplace</button>
-    </div>
+        <div class="panel active" id="installed-panel">
+            <div id="installed-list"></div>
+        </div>
 
-    <div class="panel active" id="installed-panel">
-        <div id="installed-list"></div>
-    </div>
-
-    <div class="panel" id="marketplace-panel">
-        <div id="marketplace-list"></div>
+        <div class="panel" id="marketplace-panel">
+            <div id="marketplace-list"></div>
+        </div>
     </div>
 
     <script nonce="${nonce}">
@@ -665,14 +872,33 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             }
 
             const grouped = groupBy(items, s => s.level + '|' + s.mode);
-            const order = ['project|cursor', 'project|claude', 'project|codex', 'user|cursor', 'user|claude', 'user|codex'];
+            const order = [
+                'project|cursor',
+                'project|claude',
+                'project|codex',
+                'project|gemini',
+                'project|opencode',
+                'project|agent',
+                'user|cursor',
+                'user|claude',
+                'user|codex',
+                'user|gemini',
+                'user|opencode',
+                'user|agent'
+            ];
             const labels = {
                 'project|cursor': 'Project / Cursor',
                 'project|claude': 'Project / Claude', 
                 'project|codex': 'Project / Codex',
+                'project|gemini': 'Project / Gemini CLI',
+                'project|opencode': 'Project / OpenCode',
+                'project|agent': 'Project / Antigravity',
                 'user|cursor': 'User / Cursor',
                 'user|claude': 'User / Claude',
-                'user|codex': 'User / Codex'
+                'user|codex': 'User / Codex',
+                'user|gemini': 'User / Gemini CLI',
+                'user|opencode': 'User / OpenCode',
+                'user|agent': 'User / Antigravity'
             };
 
             let html = '';
@@ -681,20 +907,25 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
                 if (!skills || skills.length === 0) return;
 
                 html += '<div class="list-header" data-group="' + key + '">' +
-                    '<span class="arrow">▾</span>' +
+                    '<span class="arrow codicon codicon-chevron-down"></span>' +
                     '<span>' + labels[key] + '</span>' +
                     '<span class="badge">' + skills.length + '</span>' +
                 '</div>';
                 html += '<div class="list-content">';
                 skills.forEach(s => {
+                    const updatedDate = s.updatedAt ? new Date(s.updatedAt).toLocaleDateString('de-DE') : '';
+                    const marketplaceMatch = marketplace.find(m => m.name === s.name);
                     html += '<div class="list-item" tabindex="0" data-path="' + esc(s.path) + '">' +
                         '<div class="item-content">' +
-                            '<div class="item-title">' + esc(s.name) + '</div>' +
+                            '<div class="item-title title-link" data-path="' + esc(s.path) + '">' + esc(s.name) + '</div>' +
                             '<div class="item-subtitle">' + esc(s.description || 'No description') + '</div>' +
                         '</div>' +
                         '<div class="item-actions">' +
-                            '<button class="secondary open-btn" data-path="' + esc(s.path) + '">Open</button>' +
-                            '<button class="icon-btn delete-btn" data-path="' + esc(s.path) + '" data-name="' + esc(s.name) + '" title="Delete">✕</button>' +
+                            (updatedDate ? '<span class="item-meta-top"><span class="codicon codicon-history"></span>' + esc(updatedDate) + '</span>' : '<span></span>') +
+                            '<div class="item-buttons">' +
+                                (marketplaceMatch ? '<button class="reinstall-btn install-btn" data-repo="' + esc(marketplaceMatch.repo) + '" data-skill="' + esc(s.name) + '">Reinstall</button>' : '') +
+                                '<button class="remove-btn delete-btn" data-path="' + esc(s.path) + '" data-name="' + esc(s.name) + '">Remove</button>' +
+                            '</div>' +
                         '</div>' +
                     '</div>';
                 });
@@ -737,22 +968,24 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
             const installedNames = new Set(installed.map(s => s.name));
 
-            let html = '';
+            let html = '<div class="marketplace-disclaimer">Data provided by <a href="#" class="disclaimer-link" data-url="https://skills.sh">skills.sh</a>, an open directory by Vercel</div>';
             items.forEach(s => {
                 const isInstalled = installedNames.has(s.name);
-                html += '<div class="list-item" tabindex="0">' +
+                const rowClass = isInstalled ? 'list-item installed-gradient' : 'list-item';
+                const btnClass = isInstalled ? 'reinstall-btn install-btn' : 'primary install-btn';
+                const btnLabel = isInstalled ? 'Reinstall' : 'Install';
+                const skillUrl = 'https://skills.sh/' + s.repo + '/' + s.name;
+                html += '<div class="' + rowClass + '" tabindex="0">' +
                     '<div class="item-content">' +
-                        '<div class="item-title">' + esc(s.name) + '</div>' +
+                        '<div class="item-title title-link" data-url="' + esc(skillUrl) + '">' + esc(s.name) + '</div>' +
                         '<div class="item-subtitle">' + esc(s.repo) + '</div>' +
-                        '<div class="item-meta">' +
-                            '<span>' + esc(s.installs) + ' installs</span>' +
-                            (isInstalled ? '<span class="installed-badge">Installed</span>' : '') +
-                        '</div>' +
                     '</div>' +
                     '<div class="item-actions">' +
-                        '<button class="primary install-btn" data-repo="' + esc(s.repo) + '" data-skill="' + esc(s.name) + '">' + 
-                            (isInstalled ? 'Reinstall' : 'Install') + 
-                        '</button>' +
+                        '<span class="item-meta-top">' +
+                            '<span class="codicon codicon-cloud-download"></span>' +
+                            '<span>' + esc(s.installs) + '</span>' +
+                        '</span>' +
+                        '<button class="' + btnClass + '" data-repo="' + esc(s.repo) + '" data-skill="' + esc(s.name) + '">' + btnLabel + '</button>' +
                     '</div>' +
                 '</div>';
             });
@@ -784,16 +1017,27 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
                 e.target.closest('.list-header').classList.toggle('collapsed');
                 return;
             }
+
+            const titleLink = e.target.closest('.title-link');
+            if (titleLink) {
+                if (titleLink.dataset.path) {
+                    vscode.postMessage({ command: 'openSkill', path: titleLink.dataset.path });
+                } else if (titleLink.dataset.url) {
+                    vscode.postMessage({ command: 'openUrl', url: titleLink.dataset.url });
+                }
+                return;
+            }
+
+            const disclaimerLink = e.target.closest('.disclaimer-link');
+            if (disclaimerLink) {
+                e.preventDefault();
+                vscode.postMessage({ command: 'openUrl', url: disclaimerLink.dataset.url });
+                return;
+            }
             
             const installBtn = e.target.closest('.install-btn');
             if (installBtn) {
                 vscode.postMessage({ command: 'install', repo: installBtn.dataset.repo, skill: installBtn.dataset.skill });
-                return;
-            }
-
-            const openBtn = e.target.closest('.open-btn');
-            if (openBtn) {
-                vscode.postMessage({ command: 'openSkill', path: openBtn.dataset.path });
                 return;
             }
 
