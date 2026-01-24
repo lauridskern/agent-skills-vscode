@@ -35,7 +35,7 @@ Install skills to any supported coding agent with a single click:
 
 1. Open VS Code
 2. Go to Extensions (Ctrl+Shift+X / Cmd+Shift+X)
-3. Search for "Agent Skills"
+3. Search for "Agent Skills - Browse, Install & Manage"
 4. Click Install
 
 Or install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=laurids.agent-skills-sh).
