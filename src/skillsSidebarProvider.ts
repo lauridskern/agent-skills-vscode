@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
 import * as https from "https";
+import * as path from "path";
 import * as zlib from "zlib";
 import { SkillInstaller } from "./skillInstaller";
 import { scanAllSkills } from "./skillScanner";
@@ -59,6 +61,14 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       this._updateWebview();
     });
     this._fetchMarketplaceSkills();
+
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this._refreshInstalledSkills().then(() => {
+          this._updateWebview();
+        });
+      }
+    });
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
       switch (message.command) {
@@ -399,24 +409,90 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async _deleteSkill(path: string, name: string) {
+  private async _deleteSkill(skillPath: string, name: string) {
+    const matching = this._installedSkills.filter((skill) => skill.name === name);
+    let confirmLabel = "Delete";
+    let removeAll = false;
+
+    if (matching.length > 1) {
+      const choice = await vscode.window.showWarningMessage(
+        `Skill "${name}" is installed for multiple agents. Remove from all agents?`,
+        { modal: true },
+        "Yes",
+        "No",
+      );
+
+      if (!choice) {
+        return;
+      }
+
+      removeAll = choice === "Yes";
+      confirmLabel = removeAll ? "Remove all" : "Remove this";
+    }
+
     const confirm = await vscode.window.showWarningMessage(
       `Delete skill "${name}"?`,
       { modal: true },
-      "Delete",
+      confirmLabel,
     );
 
-    if (confirm === "Delete") {
-      try {
-        const skillDir = vscode.Uri.file(path.replace(/\/SKILL\.md$/, ""));
-        await vscode.workspace.fs.delete(skillDir, { recursive: true });
-        await this._refreshInstalledSkills();
-        this._updateWebview();
-        vscode.window.showInformationMessage(`Skill "${name}" deleted.`);
-      } catch (error) {
-        vscode.window.showErrorMessage(`Failed to delete skill: ${error}`);
-      }
+    if (confirm !== confirmLabel) {
+      return;
     }
+
+    try {
+      const pathsToDelete = removeAll
+        ? matching.map((skill) => skill.path)
+        : [skillPath];
+
+      const deletedTargets = new Set<string>();
+      const resolvedTargets = new Set<string>();
+
+      for (const target of pathsToDelete) {
+        const { targetPath, resolvedTarget } = await this._deleteSkillPath(target);
+        deletedTargets.add(targetPath);
+        if (resolvedTarget) {
+          resolvedTargets.add(resolvedTarget);
+        }
+      }
+
+      if (resolvedTargets.size > 0) {
+        for (const resolvedTarget of resolvedTargets) {
+          const normalizedResolved = path.normalize(resolvedTarget);
+          const normalizedLower = normalizedResolved.toLowerCase();
+          const agentsMarker = `${path.sep}.agents${path.sep}skills${path.sep}`;
+          const shouldDeleteSource = normalizedLower.includes(agentsMarker);
+          if (shouldDeleteSource && !deletedTargets.has(resolvedTarget)) {
+            await fs.promises.rm(resolvedTarget, { recursive: true, force: true });
+          }
+        }
+      }
+
+      await this._refreshInstalledSkills();
+      this._updateWebview();
+      vscode.window.showInformationMessage(`Skill "${name}" deleted.`);
+    } catch (error) {
+      vscode.window.showErrorMessage(`Failed to delete skill: ${error}`);
+    }
+  }
+
+  private async _deleteSkillPath(skillPath: string): Promise<{ targetPath: string; resolvedTarget?: string }> {
+    const normalizedPath = path.normalize(skillPath);
+    const baseName = path.basename(normalizedPath).toLowerCase();
+    const isSkillMarkdown = baseName === "skill.md";
+    const targetPath = isSkillMarkdown ? path.dirname(normalizedPath) : normalizedPath;
+    let resolvedTarget: string | undefined;
+
+    try {
+      const stats = await fs.promises.lstat(targetPath);
+      if (stats.isSymbolicLink()) {
+        resolvedTarget = await fs.promises.realpath(targetPath);
+      }
+    } catch {
+    }
+
+    await fs.promises.rm(targetPath, { recursive: true, force: true });
+    return { targetPath, resolvedTarget };
   }
 
   private _updateWebview() {
