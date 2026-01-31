@@ -8,10 +8,15 @@ import { scanAllSkills } from "./skillScanner";
 import { Skill, SkillLevel, CompatibilityMode } from "./types";
 
 interface MarketplaceSkill {
+  id: string;
   name: string;
-  repo: string;
-  installs: string;
-  url: string;
+  installs: number;
+  topSource: string;
+}
+
+interface SkillsApiResponse {
+  skills: MarketplaceSkill[];
+  hasMore: boolean;
 }
 
 interface CachedData<T> {
@@ -31,7 +36,22 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   private _installedSkills: Skill[] = [];
   private _marketplaceSkills: MarketplaceSkill[] = [];
   private _isLoadingMarketplace = false;
+  private _isLoadingMore = false;
   private _marketplaceError: string | null = null;
+  private _hasMore = false;
+  private _currentOffset = 0;
+  private _searchQuery = "";
+  private _isSearching = false;
+  private _activePanel: "installed" | "marketplace" = "installed";
+  private _installedScrollTop = 0;
+  private _marketplaceScrollTop = 0;
+  private _webviewReady = false;
+  private _lastBrowseSkills: MarketplaceSkill[] = [];
+  private _lastBrowseHasMore = false;
+  private _lastBrowseOffset = 0;
+  private _searchRequestId = 0;
+  private _browseRequestId = 0;
+  private static readonly PAGE_SIZE = 50;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -55,7 +75,8 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     };
 
     this._loadFromCache();
-    this._updateWebview();
+    this._webviewReady = false;
+    webviewView.webview.html = this._getHtmlContent(webviewView.webview);
     
     this._refreshInstalledSkills().then(() => {
       this._updateWebview();
@@ -83,6 +104,9 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "refresh":
           await this._refreshInstalledSkills();
+          this._searchQuery = "";
+          this._isSearching = false;
+          this._searchRequestId += 1;
           await this._fetchMarketplaceSkills(true);
           break;
         case "openExternal":
@@ -90,6 +114,26 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "openUrl":
           vscode.commands.executeCommand('simpleBrowser.show', message.url);
+          break;
+        case "search":
+          await this._handleSearch(message.query);
+          break;
+        case "loadMore":
+          await this._loadMoreSkills();
+          break;
+        case "setActivePanel":
+          this._activePanel = message.panel;
+          break;
+        case "webviewReady":
+          this._webviewReady = true;
+          this._updateWebview();
+          break;
+        case "panelScroll":
+          if (message.panel === "installed") {
+            this._installedScrollTop = Number(message.scrollTop) || 0;
+          } else if (message.panel === "marketplace") {
+            this._marketplaceScrollTop = Number(message.scrollTop) || 0;
+          }
           break;
       }
     });
@@ -106,9 +150,14 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       this._installedSkills = cachedInstalled.data;
     }
 
-    const cachedMarketplace = this._context.globalState.get<CachedData<MarketplaceSkill[]>>(CACHE_KEY_MARKETPLACE);
-    if (cachedMarketplace?.data) {
-      this._marketplaceSkills = cachedMarketplace.data;
+    const cachedMarketplace = this._context.globalState.get<CachedData<{ skills: MarketplaceSkill[]; hasMore: boolean }>>(CACHE_KEY_MARKETPLACE);
+    if (cachedMarketplace?.data?.skills) {
+      this._marketplaceSkills = cachedMarketplace.data.skills;
+      this._hasMore = cachedMarketplace.data.hasMore;
+      this._currentOffset = this._marketplaceSkills.length;
+      this._lastBrowseSkills = this._marketplaceSkills;
+      this._lastBrowseHasMore = this._hasMore;
+      this._lastBrowseOffset = this._currentOffset;
     }
   }
 
@@ -124,48 +173,173 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     if (this._isLoadingMarketplace) return;
     
     if (!forceRefresh) {
-      const cached = this._context.globalState.get<CachedData<MarketplaceSkill[]>>(CACHE_KEY_MARKETPLACE);
+      const cached = this._context.globalState.get<CachedData<{ skills: MarketplaceSkill[]; hasMore: boolean }>>(CACHE_KEY_MARKETPLACE);
       const isCacheValid = cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS;
       
       if (isCacheValid && this._marketplaceSkills.length > 0) {
+        this._hasMore = cached.data.hasMore;
         this._isLoadingMarketplace = false;
         return;
       }
     }
 
-    this._isLoadingMarketplace = true;
-    this._marketplaceError = null;
-    if (this._marketplaceSkills.length === 0) {
-      this._updateWebview();
+    const shouldApplyAtStart = !this._isSearching && !this._searchQuery.trim();
+    if (shouldApplyAtStart) {
+      this._isLoadingMarketplace = true;
+      this._marketplaceError = null;
+      this._currentOffset = 0;
+      if (this._marketplaceSkills.length === 0) {
+        this._updateWebview();
+      }
     }
+    const requestId = ++this._browseRequestId;
 
     try {
-      const html = await this._httpGet("https://skills.sh/");
-      this._marketplaceSkills = this._parseSkillsFromHtml(html);
-      if (this._marketplaceSkills.length === 0) {
+      const url = `https://skills.sh/api/skills?limit=${SkillsSidebarProvider.PAGE_SIZE}&offset=0`;
+      const response = await this._httpGetJson<SkillsApiResponse>(url);
+      if (requestId !== this._browseRequestId) return;
+      const nextSkills = response.skills;
+      const nextHasMore = response.hasMore;
+      const nextOffset = response.skills.length;
+
+      this._lastBrowseSkills = nextSkills;
+      this._lastBrowseHasMore = nextHasMore;
+      this._lastBrowseOffset = nextOffset;
+
+      const shouldApplyNow = !this._isSearching && !this._searchQuery.trim();
+      if (shouldApplyNow) {
+        this._marketplaceSkills = nextSkills;
+        this._hasMore = nextHasMore;
+        this._currentOffset = nextOffset;
+      }
+      
+      if (shouldApplyNow && this._marketplaceSkills.length === 0) {
         this._marketplaceError = "No skills found in response. Try refreshing.";
       } else {
         this._context.globalState.update(CACHE_KEY_MARKETPLACE, {
-          data: this._marketplaceSkills,
+          data: { skills: nextSkills, hasMore: nextHasMore },
           timestamp: Date.now()
-        } as CachedData<MarketplaceSkill[]>);
+        } as CachedData<{ skills: MarketplaceSkill[]; hasMore: boolean }>);
       }
     } catch (error: any) {
-      this._marketplaceError = `Failed to load: ${error?.message || error}`;
+      if (requestId !== this._browseRequestId) return;
+      const shouldApplyNow = !this._isSearching && !this._searchQuery.trim();
+      if (shouldApplyNow) {
+        this._marketplaceError = `Failed to load: ${error?.message || error}`;
+      }
     }
 
-    this._isLoadingMarketplace = false;
+    const shouldApplyNow = !this._isSearching && !this._searchQuery.trim();
+    if (requestId === this._browseRequestId && shouldApplyNow) {
+      this._isLoadingMarketplace = false;
+      this._updateWebview();
+    }
+  }
+
+  private async _handleSearch(query: string) {
+    const trimmedQuery = query.trim();
+    this._searchQuery = query;
+    this._activePanel = "marketplace";
+    const requestId = ++this._searchRequestId;
+    
+    if (!trimmedQuery) {
+      this._isSearching = false;
+      this._isLoadingMarketplace = false;
+      this._marketplaceError = null;
+      if (this._lastBrowseSkills.length > 0) {
+        this._marketplaceSkills = this._lastBrowseSkills;
+        this._hasMore = this._lastBrowseHasMore;
+        this._currentOffset = this._lastBrowseOffset;
+        this._marketplaceError = null;
+        this._isLoadingMarketplace = false;
+        this._updateWebview();
+        void this._fetchMarketplaceSkills(true);
+        return;
+      }
+      await this._fetchMarketplaceSkills(true);
+      return;
+    }
+
+    this._isSearching = true;
+    this._isLoadingMarketplace = true;
+    this._marketplaceError = null;
+    this._updateWebview();
+
+    try {
+      const url = `https://skills.sh/api/search?q=${encodeURIComponent(trimmedQuery)}&limit=${SkillsSidebarProvider.PAGE_SIZE}`;
+      const response = await this._httpGetJson<SkillsApiResponse>(url);
+      if (requestId !== this._searchRequestId) {
+        return;
+      }
+      this._marketplaceSkills = response.skills;
+      this._hasMore = response.hasMore;
+      this._currentOffset = response.skills.length;
+    } catch (error: any) {
+      if (requestId !== this._searchRequestId) {
+        return;
+      }
+      this._marketplaceError = `Search failed: ${error?.message || error}`;
+    }
+
+    if (requestId === this._searchRequestId) {
+      this._isLoadingMarketplace = false;
+      this._updateWebview();
+    }
+  }
+
+  private async _loadMoreSkills() {
+    if (this._isLoadingMore || !this._hasMore) return;
+
+    this._isLoadingMore = true;
+    this._activePanel = "marketplace";
+    this._updateWebview();
+
+    let shouldApply = true;
+    try {
+      const requestSearchId = this._searchRequestId;
+      const requestQuery = this._searchQuery.trim();
+      const requestIsSearching = this._isSearching;
+      let url: string;
+      if (requestIsSearching && requestQuery) {
+        url = `https://skills.sh/api/search?q=${encodeURIComponent(requestQuery)}&limit=${SkillsSidebarProvider.PAGE_SIZE}&offset=${this._currentOffset}`;
+      } else {
+        url = `https://skills.sh/api/skills?limit=${SkillsSidebarProvider.PAGE_SIZE}&offset=${this._currentOffset}`;
+      }
+      
+      const response = await this._httpGetJson<SkillsApiResponse>(url);
+      if (requestIsSearching) {
+        if (requestSearchId !== this._searchRequestId || !this._isSearching || this._searchQuery.trim() !== requestQuery) {
+          shouldApply = false;
+        }
+      } else if (this._isSearching || this._searchQuery.trim() !== requestQuery) {
+        shouldApply = false;
+      }
+      if (shouldApply) {
+        this._marketplaceSkills = [...this._marketplaceSkills, ...response.skills];
+        this._hasMore = response.hasMore;
+        this._currentOffset += response.skills.length;
+        if (!this._isSearching || !this._searchQuery.trim()) {
+          this._lastBrowseSkills = this._marketplaceSkills;
+          this._lastBrowseHasMore = this._hasMore;
+          this._lastBrowseOffset = this._currentOffset;
+        }
+      }
+    } catch (error: any) {
+      this._marketplaceError = `Failed to load more: ${error?.message || error}`;
+    }
+
+    this._isLoadingMore = false;
     this._updateWebview();
   }
 
-  private _httpGet(url: string): Promise<string> {
+  private _httpGet(url: string, accept = "text/html,application/xhtml+xml"): Promise<string> {
     return new Promise((resolve, reject) => {
       const request = https.get(
         url,
         {
           headers: {
             "User-Agent": "AgentSkillsExtension/1.0",
-            Accept: "text/html,application/xhtml+xml",
+            Accept: accept,
             "Accept-Encoding": "gzip, deflate, br",
           },
         },
@@ -176,7 +350,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             res.statusCode < 400 &&
             res.headers.location
           ) {
-            this._httpGet(res.headers.location).then(resolve).catch(reject);
+            this._httpGet(res.headers.location, accept).then(resolve).catch(reject);
             return;
           }
 
@@ -211,72 +385,9 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private _parseSkillsFromHtml(html: string): MarketplaceSkill[] {
-    const skills: MarketplaceSkill[] = [];
-    const seen = new Set<string>();
-
-    const linkPattern =
-      /<a[^>]*href="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>([^<]+)<\/h3>[\s\S]*?<p[^>]*>([^<]+)<\/p>[\s\S]*?([0-9,.]+K?)\s*<\/[^>]*>[\s\S]*?<\/a>/g;
-    let match;
-    while ((match = linkPattern.exec(html)) !== null) {
-      const path = match[1];
-      const name = match[2].trim();
-      const repo = match[3].trim();
-      const installs = match[4].trim();
-      const url = path.startsWith("http") ? path : `https://skills.sh${path}`;
-      const key = `${repo}/${name}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        skills.push({ name, repo, installs, url });
-      }
-    }
-
-    if (skills.length === 0) {
-      const urlPattern =
-        /https:\/\/skills\.sh\/([^/\s"')]+)\/([^/\s"')]+)\/([^/\s"')]+)/g;
-      while ((match = urlPattern.exec(html)) !== null) {
-        const owner = decodeURIComponent(match[1]);
-        const repoName = decodeURIComponent(match[2]);
-        const skillName = decodeURIComponent(match[3]);
-
-        if (owner === "agents" || owner === "docs" || owner === "trending")
-          continue;
-
-        const repo = `${owner}/${repoName}`;
-        const key = `${repo}/${skillName}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          skills.push({
-            name: skillName,
-            repo,
-            installs: "—",
-            url: `https://skills.sh/${owner}/${repoName}/${skillName}`,
-          });
-        }
-      }
-    }
-
-    if (skills.length === 0) {
-      const markdownPattern =
-        /###\s+([^\n]+)\n([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)\n([0-9,.]+K?)/g;
-      while ((match = markdownPattern.exec(html)) !== null) {
-        const name = match[1].trim();
-        const repo = match[2].trim();
-        const installs = match[3].trim();
-        const key = `${repo}/${name}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          skills.push({
-            name,
-            repo,
-            installs,
-            url: `https://skills.sh/${repo}/${name}`,
-          });
-        }
-      }
-    }
-
-    return skills;
+  private async _httpGetJson<T>(url: string): Promise<T> {
+    const response = await this._httpGet(url, "application/json");
+    return JSON.parse(response) as T;
   }
 
   private async _handleInstall(repo: string, skillName?: string) {
@@ -496,14 +607,16 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private _updateWebview() {
-    if (!this._view) return;
-    this._view.webview.html = this._getHtmlContent(this._view.webview);
+    if (!this._view || !this._webviewReady) return;
+    this._view.webview.postMessage({
+      command: "state",
+      state: this._getWebviewState(),
+    });
   }
 
   private _getHtmlContent(webview: vscode.Webview): string {
     const nonce = this._getNonce();
-    const installedJson = JSON.stringify(this._installedSkills);
-    const marketplaceJson = JSON.stringify(this._marketplaceSkills);
+    const initialStateJson = JSON.stringify(this._getWebviewState());
 
     const codiconsUri = webview.asWebviewUri(
       vscode.Uri.joinPath(
@@ -908,21 +1021,47 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         
-        const installed = ${installedJson};
-        const marketplace = ${marketplaceJson};
-        const isLoading = ${this._isLoadingMarketplace};
-        const loadError = ${JSON.stringify(this._marketplaceError)};
-        
-        let activePanel = 'installed';
-        let searchQuery = '';
+        const initialState = ${initialStateJson};
+        let state = initialState || {};
+        let activePanel = state.activePanel || 'installed';
+        let searchTimeout = null;
+        let scrollRaf = null;
 
         const installedList = document.getElementById('installed-list');
         const marketplaceList = document.getElementById('marketplace-list');
+        const searchInput = document.getElementById('search');
+        const installedPanel = document.getElementById('installed-panel');
+        const marketplacePanel = document.getElementById('marketplace-panel');
+
+        const persistedState = vscode.getState() || {};
+        const scrollState = {
+            installed: state.scroll?.installed ?? persistedState.scroll?.installed ?? 0,
+            marketplace: state.scroll?.marketplace ?? persistedState.scroll?.marketplace ?? 0
+        };
+        let localSearchQuery = persistedState.search?.query ?? state.searchQuery ?? '';
+        let installed = state.installedSkills || [];
+        let marketplace = state.marketplaceSkills || [];
+        let isLoading = Boolean(state.isLoadingMarketplace);
+        let isLoadingMore = Boolean(state.isLoadingMore);
+        let hasMore = Boolean(state.hasMore);
+        let loadError = state.marketplaceError || null;
+
+        searchInput.value = localSearchQuery;
+
+        document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.panel === activePanel));
+        document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === activePanel + '-panel'));
 
         function esc(str) {
             const d = document.createElement('div');
-            d.textContent = str || '';
+            d.textContent = str != null ? String(str) : '';
             return d.innerHTML;
+        }
+
+        function formatInstalls(num) {
+            if (typeof num !== 'number') return String(num);
+            if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1).replace(/\\.0$/, '') + 'K';
+            return String(num);
         }
 
         function groupBy(arr, keyFn) {
@@ -935,14 +1074,14 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
         function renderInstalled() {
             let items = installed;
-            if (searchQuery) {
-                const q = searchQuery.toLowerCase();
+            if (localSearchQuery) {
+                const q = localSearchQuery.toLowerCase();
                 items = items.filter(s => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
             }
 
             if (items.length === 0) {
                 installedList.innerHTML = '<div class="empty-state">' + 
-                    (searchQuery ? 'No matching skills found.' : 'No skills installed.<br><br>Switch to Browse to discover and install skills.') + 
+                    (localSearchQuery ? 'No matching skills found.' : 'No skills installed.<br><br>Switch to Browse to discover and install skills.') + 
                 '</div>';
                 return;
             }
@@ -999,7 +1138,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
                         '<div class="item-actions">' +
                             (updatedDate ? '<span class="item-meta-top"><span class="codicon codicon-history"></span>' + esc(updatedDate) + '</span>' : '<span></span>') +
                             '<div class="item-buttons">' +
-                                (marketplaceMatch ? '<button class="reinstall-btn install-btn" data-repo="' + esc(marketplaceMatch.repo) + '" data-skill="' + esc(s.name) + '">Reinstall</button>' : '') +
+                                (marketplaceMatch ? '<button class="reinstall-btn install-btn" data-repo="' + esc(marketplaceMatch.topSource) + '" data-skill="' + esc(s.name) + '">Reinstall</button>' : '') +
                                 '<button class="remove-btn delete-btn" data-path="' + esc(s.path) + '" data-name="' + esc(s.name) + '">Remove</button>' +
                             '</div>' +
                         '</div>' +
@@ -1012,12 +1151,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         }
 
         function renderMarketplace() {
-            if (isLoading) {
+            if (isLoading && marketplace.length === 0) {
                 marketplaceList.innerHTML = '<div class="loading">Loading skills...</div>';
                 return;
             }
 
-            if (loadError) {
+            if (loadError && marketplace.length === 0) {
                 marketplaceList.innerHTML = '<div class="empty-state">' + esc(loadError) + '<br><br><a href="#" class="retry-link">Try again</a></div>';
                 const retryLink = marketplaceList.querySelector('.retry-link');
                 if (retryLink) {
@@ -1029,15 +1168,11 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            let items = marketplace;
-            if (searchQuery) {
-                const q = searchQuery.toLowerCase();
-                items = items.filter(s => s.name.toLowerCase().includes(q) || s.repo.toLowerCase().includes(q));
-            }
+            const items = marketplace;
 
             if (items.length === 0) {
                 marketplaceList.innerHTML = '<div class="empty-state">' + 
-                    (searchQuery ? 'No matching skills found.' : 'No skills available.') + 
+                    (localSearchQuery ? 'No matching skills found.' : 'No skills available.') + 
                 '</div>';
                 return;
             }
@@ -1050,33 +1185,102 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
                 const rowClass = isInstalled ? 'list-item installed-gradient' : 'list-item';
                 const btnClass = isInstalled ? 'reinstall-btn install-btn' : 'primary install-btn';
                 const btnLabel = isInstalled ? 'Reinstall' : 'Install';
-                const skillUrl = 'https://skills.sh/' + s.repo + '/' + s.name;
+                const skillUrl = 'https://skills.sh/' + esc(s.topSource) + '/' + esc(s.name);
                 html += '<div class="' + rowClass + '" tabindex="0">' +
                     '<div class="item-content">' +
                         '<div class="item-title title-link" data-url="' + esc(skillUrl) + '">' + esc(s.name) + '</div>' +
-                        '<div class="item-subtitle">' + esc(s.repo) + '</div>' +
+                        '<div class="item-subtitle">' + esc(s.topSource) + '</div>' +
                     '</div>' +
                     '<div class="item-actions">' +
                         '<span class="item-meta-top">' +
                             '<span class="codicon codicon-cloud-download"></span>' +
-                            '<span>' + esc(s.installs) + '</span>' +
+                            '<span>' + formatInstalls(s.installs) + '</span>' +
                         '</span>' +
-                        '<button class="' + btnClass + '" data-repo="' + esc(s.repo) + '" data-skill="' + esc(s.name) + '">' + btnLabel + '</button>' +
+                        '<button class="' + btnClass + '" data-repo="' + esc(s.topSource) + '" data-skill="' + esc(s.name) + '">' + btnLabel + '</button>' +
                     '</div>' +
                 '</div>';
             });
 
+            if (hasMore) {
+                html += '<div id="load-more-trigger" class="loading" style="padding: 12px;">' + 
+                    (isLoadingMore ? 'Loading more...' : '') + 
+                '</div>';
+            }
+
             marketplaceList.innerHTML = html;
+            setupInfiniteScroll();
+        }
+
+        function setupInfiniteScroll() {
+            const trigger = document.getElementById('load-more-trigger');
+            if (!trigger || !hasMore) return;
+
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting && hasMore && !isLoadingMore && !isLoading) {
+                        vscode.postMessage({ command: 'loadMore' });
+                    }
+                });
+            }, { threshold: 0.1 });
+
+            observer.observe(trigger);
+        }
+
+        function persistState(next) {
+            const current = vscode.getState() || {};
+            vscode.setState({ ...current, ...next });
+        }
+
+        function applyState(nextState) {
+            if (!nextState) return;
+            state = nextState;
+            installed = state.installedSkills || [];
+            marketplace = state.marketplaceSkills || [];
+            isLoading = Boolean(state.isLoadingMarketplace);
+            isLoadingMore = Boolean(state.isLoadingMore);
+            hasMore = Boolean(state.hasMore);
+            loadError = state.marketplaceError || null;
+            activePanel = state.activePanel || activePanel;
+            const isFocused = document.activeElement === searchInput;
+            if (!isFocused) {
+                localSearchQuery = state.searchQuery ?? localSearchQuery;
+                searchInput.value = localSearchQuery;
+                const current = vscode.getState() || {};
+                persistState({ search: { ...(current.search || {}), query: localSearchQuery } });
+            }
+            document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.panel === activePanel));
+            document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === activePanel + '-panel'));
         }
 
         function render() {
             if (activePanel === 'installed') renderInstalled();
             else renderMarketplace();
+            requestAnimationFrame(() => {
+                if (activePanel === 'installed' && installedPanel) {
+                    installedPanel.scrollTop = scrollState.installed || 0;
+                } else if (activePanel === 'marketplace' && marketplacePanel) {
+                    marketplacePanel.scrollTop = scrollState.marketplace || 0;
+                }
+            });
         }
 
-        document.getElementById('search').addEventListener('input', e => {
-            searchQuery = e.target.value;
-            render();
+        searchInput.addEventListener('input', e => {
+            localSearchQuery = e.target.value;
+            const current = vscode.getState() || {};
+            persistState({ search: { ...(current.search || {}), query: localSearchQuery } });
+            
+            if (activePanel === 'installed') {
+                render();
+            } else {
+                scrollState.marketplace = 0;
+                if (marketplacePanel) {
+                    marketplacePanel.scrollTop = 0;
+                }
+                if (searchTimeout) clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
+                    vscode.postMessage({ command: 'search', query: localSearchQuery });
+                }, 150);
+            }
         });
 
         document.querySelectorAll('.tab').forEach(tab => {
@@ -1084,9 +1288,32 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
                 activePanel = tab.dataset.panel;
                 document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
                 document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === activePanel + '-panel'));
+                vscode.postMessage({ command: 'setActivePanel', panel: activePanel });
                 render();
             });
         });
+
+        function scheduleScrollReport(panelKey, top) {
+            scrollState[panelKey] = top;
+            if (scrollRaf) return;
+            scrollRaf = requestAnimationFrame(() => {
+                scrollRaf = null;
+                persistState({ scroll: scrollState, activePanel });
+                vscode.postMessage({ command: 'panelScroll', panel: panelKey, scrollTop: scrollState[panelKey] });
+            });
+        }
+
+        if (installedPanel) {
+            installedPanel.addEventListener('scroll', () => {
+                scheduleScrollReport('installed', installedPanel.scrollTop);
+            });
+        }
+
+        if (marketplacePanel) {
+            marketplacePanel.addEventListener('scroll', () => {
+                scheduleScrollReport('marketplace', marketplacePanel.scrollTop);
+            });
+        }
 
         document.addEventListener('click', e => {
             if (e.target.closest('.list-header')) {
@@ -1124,10 +1351,36 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             }
         });
 
+        window.addEventListener('message', event => {
+            const message = event.data;
+            if (message?.command === 'state') {
+                applyState(message.state);
+                render();
+            }
+        });
+
+        vscode.postMessage({ command: 'webviewReady' });
         render();
     </script>
 </body>
 </html>`;
+  }
+
+  private _getWebviewState() {
+    return {
+      installedSkills: this._installedSkills,
+      marketplaceSkills: this._marketplaceSkills,
+      isLoadingMarketplace: this._isLoadingMarketplace,
+      isLoadingMore: this._isLoadingMore,
+      hasMore: this._hasMore,
+      marketplaceError: this._marketplaceError,
+      searchQuery: this._searchQuery,
+      activePanel: this._activePanel,
+      scroll: {
+        installed: this._installedScrollTop,
+        marketplace: this._marketplaceScrollTop,
+      },
+    };
   }
 
   private _getNonce(): string {
