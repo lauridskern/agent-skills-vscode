@@ -108,9 +108,9 @@ export function getSkillsSidebarScript(): string {
                 html += '<div class="list-content">';
                 skills.forEach(s => {
                     const updatedDate = s.updatedAt ? new Date(s.updatedAt).toLocaleDateString('de-DE') : '';
-                    // Match by source if available, otherwise fall back to name-only for single matches
-                    const marketplaceMatch = s.source 
-                        ? marketplace.find(m => m.name === s.name && m.source === s.source)
+                    // Match by marketplace id, or fallback to name if no id and no ambiguity
+                    const marketplaceMatch = s.marketplaceId 
+                        ? marketplace.find(m => m.id === s.marketplaceId)
                         : marketplace.filter(m => m.name === s.name).length === 1 
                             ? marketplace.find(m => m.name === s.name) 
                             : null;
@@ -161,16 +161,12 @@ export function getSkillsSidebarScript(): string {
                 return;
             }
 
-            // Build a map of installed skills by name, tracking their sources
-            const installedByName = new Map();
-            installed.forEach(s => {
-                if (!installedByName.has(s.name)) {
-                    installedByName.set(s.name, []);
-                }
-                installedByName.get(s.name).push(s.source);
-            });
+            // Build a set of installed marketplace ids for fast lookup
+            const installedIds = new Set(installed.map(s => s.marketplaceId).filter(Boolean));
+            // Also track installed names for fallback when no marketplaceId
+            const installedNames = new Set(installed.filter(s => !s.marketplaceId).map(s => s.name));
 
-            // Count marketplace skills by name to detect duplicates
+            // Count marketplace skills by name to detect duplicates (for fallback matching)
             const marketplaceNameCount = new Map();
             items.forEach(s => {
                 marketplaceNameCount.set(s.name, (marketplaceNameCount.get(s.name) || 0) + 1);
@@ -178,13 +174,10 @@ export function getSkillsSidebarScript(): string {
 
             let html = '<div class="marketplace-disclaimer">Data provided by <a href="#" class="disclaimer-link" data-url="https://skills.sh">skills.sh</a>, an open directory by Vercel</div>';
             items.forEach(s => {
-                // Check if this specific skill (by name AND source) is installed
-                const installedSources = installedByName.get(s.name) || [];
-                const hasExactSourceMatch = installedSources.some(source => source === s.source);
-                const hasInstalledWithoutSource = installedSources.some(source => !source);
-                const isOnlyMarketplaceWithName = marketplaceNameCount.get(s.name) === 1;
-                // Mark as installed if: exact source match, OR installed without source but no ambiguity
-                const isInstalled = hasExactSourceMatch || (hasInstalledWithoutSource && isOnlyMarketplaceWithName);
+                // Match by marketplace id, or fallback to name if no id and no ambiguity
+                const hasIdMatch = installedIds.has(s.id);
+                const hasFallbackMatch = installedNames.has(s.name) && marketplaceNameCount.get(s.name) === 1;
+                const isInstalled = hasIdMatch || hasFallbackMatch;
                 const rowClass = isInstalled ? 'list-item installed-gradient' : 'list-item';
                 const btnClass = isInstalled ? 'reinstall-btn install-btn' : 'primary install-btn';
                 const btnLabel = isInstalled ? 'Reinstall' : 'Install';

@@ -2,6 +2,12 @@
 
 All notable changes to the Agent Skills extension will be documented in this file.
 
+## [0.1.11] - 2026-02-04
+
+### Changed
+
+- Simplify skill matching to use marketplace `id` directly instead of source + name
+
 ## [0.1.10] - 2026-02-04
 
 ### Fixed

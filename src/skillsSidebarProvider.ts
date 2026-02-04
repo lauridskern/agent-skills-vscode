@@ -153,11 +153,11 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
   private async _refreshInstalledSkills() {
     const skills = await scanAllSkills();
-    // Merge saved source info for skills that don't have it from frontmatter
-    const sourceMapping = this._context.globalState.get<Record<string, string>>(CACHE_KEY_SKILL_SOURCES, {});
+    // Merge saved marketplace id for skills
+    const idMapping = this._context.globalState.get<Record<string, string>>(CACHE_KEY_SKILL_SOURCES, {});
     this._installedSkills = skills.map(skill => ({
       ...skill,
-      source: skill.source || sourceMapping[skill.name]
+      marketplaceId: idMapping[skill.name]
     }));
     this._context.globalState.update(CACHE_KEY_INSTALLED, {
       data: this._installedSkills,
@@ -497,18 +497,19 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     });
 
     if (didInstall) {
-      // Save the source mapping for this skill
+      // Save the marketplace id for this skill (format: source/skillName)
       const installedSkillName = skillName || repo.split('/').pop() || repo;
-      await this._saveSkillSource(installedSkillName, repo);
+      const marketplaceId = `${repo}/${installedSkillName}`;
+      await this._saveSkillMarketplaceId(installedSkillName, marketplaceId);
       await this._refreshInstalledSkills();
       this._updateWebview();
     }
   }
 
-  private async _saveSkillSource(skillName: string, source: string) {
-    const sourceMapping = this._context.globalState.get<Record<string, string>>(CACHE_KEY_SKILL_SOURCES, {});
-    sourceMapping[skillName] = source;
-    await this._context.globalState.update(CACHE_KEY_SKILL_SOURCES, sourceMapping);
+  private async _saveSkillMarketplaceId(skillName: string, marketplaceId: string) {
+    const idMapping = this._context.globalState.get<Record<string, string>>(CACHE_KEY_SKILL_SOURCES, {});
+    idMapping[skillName] = marketplaceId;
+    await this._context.globalState.update(CACHE_KEY_SKILL_SOURCES, idMapping);
   }
 
 
