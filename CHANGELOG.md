@@ -2,6 +2,13 @@
 
 All notable changes to the Agent Skills extension will be documented in this file.
 
+## [0.1.10] - 2026-02-04
+
+### Fixed
+
+- Fix duplicate skill names incorrectly showing as installed (now matches by source + name)
+- Track installed skill sources for accurate reinstall detection
+
 ## [0.1.9] - 2026-02-04
 
 ### Fixed

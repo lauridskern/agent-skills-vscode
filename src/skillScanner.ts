@@ -6,6 +6,7 @@ import { Skill, SkillLevel, CompatibilityMode, getSkillDirectoryPath, SKILL_DIRE
 interface SkillFrontmatter {
     name?: string;
     description?: string;
+    source?: string;
 }
 
 function parseFrontmatter(content: string): SkillFrontmatter {
@@ -49,7 +50,8 @@ async function readSkillFromFile(
             path: skillMdPath,
             level,
             mode,
-            updatedAt
+            updatedAt,
+            source: frontmatter.source
         };
     } catch {
         return {
@@ -58,7 +60,8 @@ async function readSkillFromFile(
             path: skillMdPath,
             level,
             mode,
-            updatedAt
+            updatedAt,
+            source: undefined
         };
     }
 }

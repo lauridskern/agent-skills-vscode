@@ -15,6 +15,7 @@ export interface Skill {
     level: SkillLevel;
     mode: CompatibilityMode;
     updatedAt?: number;
+    source?: string;
 }
 
 export interface SkillDirectory {

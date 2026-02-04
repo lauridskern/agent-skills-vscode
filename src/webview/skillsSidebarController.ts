@@ -108,7 +108,12 @@ export function getSkillsSidebarScript(): string {
                 html += '<div class="list-content">';
                 skills.forEach(s => {
                     const updatedDate = s.updatedAt ? new Date(s.updatedAt).toLocaleDateString('de-DE') : '';
-                    const marketplaceMatch = marketplace.find(m => m.name === s.name);
+                    // Match by source if available, otherwise fall back to name-only for single matches
+                    const marketplaceMatch = s.source 
+                        ? marketplace.find(m => m.name === s.name && m.source === s.source)
+                        : marketplace.filter(m => m.name === s.name).length === 1 
+                            ? marketplace.find(m => m.name === s.name) 
+                            : null;
                     html += '<div class="list-item" tabindex="0" data-path="' + esc(s.path) + '">' +
                         '<div class="item-content">' +
                             '<div class="item-title title-link" data-path="' + esc(s.path) + '">' + esc(s.name) + '</div>' +
@@ -156,11 +161,30 @@ export function getSkillsSidebarScript(): string {
                 return;
             }
 
-            const installedNames = new Set(installed.map(s => s.name));
+            // Build a map of installed skills by name, tracking their sources
+            const installedByName = new Map();
+            installed.forEach(s => {
+                if (!installedByName.has(s.name)) {
+                    installedByName.set(s.name, []);
+                }
+                installedByName.get(s.name).push(s.source);
+            });
+
+            // Count marketplace skills by name to detect duplicates
+            const marketplaceNameCount = new Map();
+            items.forEach(s => {
+                marketplaceNameCount.set(s.name, (marketplaceNameCount.get(s.name) || 0) + 1);
+            });
 
             let html = '<div class="marketplace-disclaimer">Data provided by <a href="#" class="disclaimer-link" data-url="https://skills.sh">skills.sh</a>, an open directory by Vercel</div>';
             items.forEach(s => {
-                const isInstalled = installedNames.has(s.name);
+                // Check if this specific skill (by name AND source) is installed
+                const installedSources = installedByName.get(s.name) || [];
+                const hasExactSourceMatch = installedSources.some(source => source === s.source);
+                const hasInstalledWithoutSource = installedSources.some(source => !source);
+                const isOnlyMarketplaceWithName = marketplaceNameCount.get(s.name) === 1;
+                // Mark as installed if: exact source match, OR installed without source but no ambiguity
+                const isInstalled = hasExactSourceMatch || (hasInstalledWithoutSource && isOnlyMarketplaceWithName);
                 const rowClass = isInstalled ? 'list-item installed-gradient' : 'list-item';
                 const btnClass = isInstalled ? 'reinstall-btn install-btn' : 'primary install-btn';
                 const btnLabel = isInstalled ? 'Reinstall' : 'Install';

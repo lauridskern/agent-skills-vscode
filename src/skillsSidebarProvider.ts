@@ -17,6 +17,7 @@ interface CachedData<T> {
 
 const CACHE_KEY_MARKETPLACE = "cachedMarketplaceSkills";
 const CACHE_KEY_INSTALLED = "cachedInstalledSkills";
+const CACHE_KEY_SKILL_SOURCES = "skillSourceMapping";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
@@ -151,7 +152,13 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _refreshInstalledSkills() {
-    this._installedSkills = await scanAllSkills();
+    const skills = await scanAllSkills();
+    // Merge saved source info for skills that don't have it from frontmatter
+    const sourceMapping = this._context.globalState.get<Record<string, string>>(CACHE_KEY_SKILL_SOURCES, {});
+    this._installedSkills = skills.map(skill => ({
+      ...skill,
+      source: skill.source || sourceMapping[skill.name]
+    }));
     this._context.globalState.update(CACHE_KEY_INSTALLED, {
       data: this._installedSkills,
       timestamp: Date.now()
@@ -490,10 +497,20 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     });
 
     if (didInstall) {
+      // Save the source mapping for this skill
+      const installedSkillName = skillName || repo.split('/').pop() || repo;
+      await this._saveSkillSource(installedSkillName, repo);
       await this._refreshInstalledSkills();
       this._updateWebview();
     }
   }
+
+  private async _saveSkillSource(skillName: string, source: string) {
+    const sourceMapping = this._context.globalState.get<Record<string, string>>(CACHE_KEY_SKILL_SOURCES, {});
+    sourceMapping[skillName] = source;
+    await this._context.globalState.update(CACHE_KEY_SKILL_SOURCES, sourceMapping);
+  }
+
 
   private _openSkill(path: string) {
     vscode.workspace.openTextDocument(path).then((doc) => {
