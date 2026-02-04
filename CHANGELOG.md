@@ -2,6 +2,12 @@
 
 All notable changes to the Agent Skills extension will be documented in this file.
 
+## [0.1.9] - 2026-02-04
+
+### Fixed
+
+- Update API types to match new skills.sh schema (added `skillId`, renamed `topSource` to `source`)
+
 ## [0.1.8] - 2026-01-31
 
 ### Added

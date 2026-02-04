@@ -117,7 +117,7 @@ export function getSkillsSidebarScript(): string {
                         '<div class="item-actions">' +
                             (updatedDate ? '<span class="item-meta-top"><span class="codicon codicon-history"></span>' + esc(updatedDate) + '</span>' : '<span></span>') +
                             '<div class="item-buttons">' +
-                                (marketplaceMatch ? '<button class="reinstall-btn install-btn" data-repo="' + esc(marketplaceMatch.topSource) + '" data-skill="' + esc(s.name) + '">Reinstall</button>' : '') +
+                                (marketplaceMatch ? '<button class="reinstall-btn install-btn" data-repo="' + esc(marketplaceMatch.source) + '" data-skill="' + esc(s.name) + '">Reinstall</button>' : '') +
                                 '<button class="remove-btn delete-btn" data-path="' + esc(s.path) + '" data-name="' + esc(s.name) + '">Remove</button>' +
                             '</div>' +
                         '</div>' +
@@ -164,18 +164,18 @@ export function getSkillsSidebarScript(): string {
                 const rowClass = isInstalled ? 'list-item installed-gradient' : 'list-item';
                 const btnClass = isInstalled ? 'reinstall-btn install-btn' : 'primary install-btn';
                 const btnLabel = isInstalled ? 'Reinstall' : 'Install';
-                const skillUrl = 'https://skills.sh/' + esc(s.topSource) + '/' + esc(s.name);
+                const skillUrl = 'https://skills.sh/' + esc(s.source) + '/' + esc(s.name);
                 html += '<div class="' + rowClass + '" tabindex="0">' +
                     '<div class="item-content">' +
                         '<div class="item-title title-link" data-url="' + esc(skillUrl) + '">' + esc(s.name) + '</div>' +
-                        '<div class="item-subtitle">' + esc(s.topSource) + '</div>' +
+                        '<div class="item-subtitle">' + esc(s.source) + '</div>' +
                     '</div>' +
                     '<div class="item-actions">' +
                         '<span class="item-meta-top">' +
                             '<span class="codicon codicon-cloud-download"></span>' +
                             '<span>' + formatInstalls(s.installs) + '</span>' +
                         '</span>' +
-                        '<button class="' + btnClass + '" data-repo="' + esc(s.topSource) + '" data-skill="' + esc(s.name) + '">' + btnLabel + '</button>' +
+                        '<button class="' + btnClass + '" data-repo="' + esc(s.source) + '" data-skill="' + esc(s.name) + '">' + btnLabel + '</button>' +
                     '</div>' +
                 '</div>';
             });
