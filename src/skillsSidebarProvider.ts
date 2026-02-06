@@ -6,7 +6,7 @@ import * as zlib from "zlib";
 import { SkillInstaller } from "./skillInstaller";
 import { scanAllSkills } from "./skillScanner";
 import { Skill, SkillLevel, CompatibilityMode } from "./types";
-import { MarketplaceSkill, SkillsApiResponse } from "./skillsMarketplaceTypes";
+import { MarketplaceSkill, RawRscSkill, SkillsSearchResponse } from "./skillsMarketplaceTypes";
 import { WebviewState } from "./skillsSidebarState";
 import { buildSkillsSidebarHtml } from "./webview/skillsSidebarTemplate";
 
@@ -27,6 +27,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   private _installer: SkillInstaller;
   private _installedSkills: Skill[] = [];
   private _marketplaceSkills: MarketplaceSkill[] = [];
+  private _allMarketplaceSkills: MarketplaceSkill[] = [];
   private _isLoadingMarketplace = false;
   private _isLoadingMore = false;
   private _marketplaceError: string | null = null;
@@ -191,12 +192,14 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     const requestId = ++this._browseRequestId;
 
     try {
-      const url = `https://skills.sh/api/skills?limit=${SkillsSidebarProvider.PAGE_SIZE}&offset=0`;
-      const response = await this._httpGetJson<SkillsApiResponse>(url);
+      const allSkills = await this._fetchSkillsFromRsc();
       if (requestId !== this._browseRequestId) return;
-      const nextSkills = response.skills;
-      const nextHasMore = response.hasMore;
-      const nextOffset = response.skills.length;
+      
+      this._allMarketplaceSkills = allSkills;
+
+      const nextSkills = allSkills;
+      const nextHasMore = false;
+      const nextOffset = allSkills.length;
 
       this._updateBrowseCache(nextSkills, nextHasMore, nextOffset);
 
@@ -257,12 +260,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
     try {
       const url = `https://skills.sh/api/search?q=${encodeURIComponent(trimmedQuery)}&limit=${SkillsSidebarProvider.PAGE_SIZE}`;
-      const response = await this._httpGetJson<SkillsApiResponse>(url);
+      const response = await this._httpGetJson<SkillsSearchResponse>(url);
       if (requestId !== this._searchRequestId) {
         return;
       }
       this._marketplaceSkills = response.skills;
-      this._hasMore = response.hasMore;
+      this._hasMore = false;
       this._currentOffset = response.skills.length;
     } catch (error: any) {
       if (requestId !== this._searchRequestId) {
@@ -278,49 +281,11 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _loadMoreSkills() {
-    if (this._isLoadingMore || !this._hasMore) return;
-
-    this._isLoadingMore = true;
-    this._activePanel = "marketplace";
-    this._updateWebview();
-
-    let shouldApply = true;
-    try {
-      const requestSearchId = this._searchRequestId;
-      const requestQuery = this._searchQuery.trim();
-      const requestIsSearching = this._isSearching;
-      let url: string;
-      if (requestIsSearching && requestQuery) {
-        url = `https://skills.sh/api/search?q=${encodeURIComponent(requestQuery)}&limit=${SkillsSidebarProvider.PAGE_SIZE}&offset=${this._currentOffset}`;
-      } else {
-        url = `https://skills.sh/api/skills?limit=${SkillsSidebarProvider.PAGE_SIZE}&offset=${this._currentOffset}`;
-      }
-      
-      const response = await this._httpGetJson<SkillsApiResponse>(url);
-      if (requestIsSearching) {
-        if (requestSearchId !== this._searchRequestId || !this._isSearching || this._searchQuery.trim() !== requestQuery) {
-          shouldApply = false;
-        }
-      } else if (this._isSearching || this._searchQuery.trim() !== requestQuery) {
-        shouldApply = false;
-      }
-      if (shouldApply) {
-        this._marketplaceSkills = [...this._marketplaceSkills, ...response.skills];
-        this._hasMore = response.hasMore;
-        this._currentOffset += response.skills.length;
-        if (this._shouldApplyBrowseNow()) {
-          this._updateBrowseCache(this._marketplaceSkills, this._hasMore, this._currentOffset);
-        }
-      }
-    } catch (error: any) {
-      this._marketplaceError = `Failed to load more: ${error?.message || error}`;
-    }
-
-    this._isLoadingMore = false;
-    this._updateWebview();
+    // All skills are loaded at once from the RSC response, no pagination needed
+    return;
   }
 
-  private _httpGet(url: string, accept = "text/html,application/xhtml+xml"): Promise<string> {
+  private _httpGet(url: string, accept = "text/html,application/xhtml+xml", extraHeaders: Record<string, string> = {}): Promise<string> {
     return new Promise((resolve, reject) => {
       const request = https.get(
         url,
@@ -329,6 +294,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             "User-Agent": "AgentSkillsExtension/1.0",
             Accept: accept,
             "Accept-Encoding": "gzip, deflate, br",
+            ...extraHeaders,
           },
         },
         (res) => {
@@ -376,6 +342,27 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   private async _httpGetJson<T>(url: string): Promise<T> {
     const response = await this._httpGet(url, "application/json");
     return JSON.parse(response) as T;
+  }
+
+  private async _fetchSkillsFromRsc(): Promise<MarketplaceSkill[]> {
+    const rscResponse = await this._httpGet(
+      "https://skills.sh/",
+      "text/x-component",
+      { "RSC": "1", "Next-Router-State-Tree": "%5B%22%22%5D" }
+    );
+    // Extract the JSON array of skills from the RSC payload
+    const match = rscResponse.match(/\[{"source":"[^\]]*}\]/);
+    if (!match) {
+      throw new Error("Could not parse skills from response");
+    }
+    const rawSkills: RawRscSkill[] = JSON.parse(match[0]);
+    return rawSkills.map((s) => ({
+      id: `${s.source}/${s.skillId}`,
+      skillId: s.skillId,
+      name: s.name,
+      installs: s.installs,
+      source: s.source,
+    }));
   }
 
   private async _handleInstall(repo: string, skillName?: string) {

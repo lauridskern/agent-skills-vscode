@@ -2,6 +2,14 @@
 
 All notable changes to the Agent Skills extension will be documented in this file.
 
+## [0.1.12] - 2026-02-06
+
+### Fixed
+
+- Fix Browse tab after skills.sh removed `/api/skills` endpoint
+- Fetch all skills from homepage RSC payload instead of removed API
+- Search still uses `/api/search` endpoint which remains available
+
 ## [0.1.11] - 2026-02-04
 
 ### Changed

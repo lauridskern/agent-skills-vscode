@@ -6,7 +6,17 @@ export interface MarketplaceSkill {
   source: string;
 }
 
-export interface SkillsApiResponse {
+export interface RawRscSkill {
+  source: string;
+  skillId: string;
+  name: string;
+  installs: number;
+}
+
+export interface SkillsSearchResponse {
+  query: string;
+  searchType: string;
   skills: MarketplaceSkill[];
-  hasMore: boolean;
+  count: number;
+  duration_ms: number;
 }
