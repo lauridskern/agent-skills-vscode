@@ -2,6 +2,16 @@
 
 All notable changes to the Agent Skills extension will be documented in this file.
 
+## [0.1.13] - 2026-02-06
+
+### Fixed
+
+- Use `npx skills add` (current CLI) instead of legacy `npx add-skill`
+- Align CLI agent flags and telemetry opt-out env vars with upstream skills CLI
+- Align install path handling for shared `.agents/skills` and global OpenCode/Antigravity locations
+- Fix incorrect Installed tab duplication where shared `.agents/skills` entries appeared as Codex/Gemini/OpenCode
+- Show shared installs under dedicated Universal groups (`Project / Universal`, `User / Universal`)
+
 ## [0.1.12] - 2026-02-06
 
 ### Fixed

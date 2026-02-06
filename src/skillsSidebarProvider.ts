@@ -367,12 +367,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
   private async _handleInstall(repo: string, skillName?: string) {
     const agentItems: vscode.QuickPickItem[] = [
-      { label: "Antigravity", description: ".agent/skills/" },
+      { label: "Antigravity", description: ".agent/skills/ (project) or ~/.gemini/antigravity/skills (global)" },
       { label: "Claude Code", description: ".claude/skills/" },
-      { label: "Codex", description: ".codex/skills/" },
+      { label: "Codex", description: ".agents/skills/ (project) or ~/.codex/skills (global)" },
       { label: "Cursor", description: ".cursor/skills/" },
-      { label: "Gemini CLI", description: ".gemini/skills/" },
-      { label: "OpenCode", description: ".opencode/skills/" },
+      { label: "Gemini CLI", description: ".agents/skills/ (project) or ~/.gemini/skills (global)" },
+      { label: "OpenCode", description: ".agents/skills/ (project) or ~/.config/opencode/skills (global)" },
     ];
 
     const modeMap: Record<string, CompatibilityMode | undefined> = {

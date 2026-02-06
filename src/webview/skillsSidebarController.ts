@@ -67,12 +67,14 @@ export function getSkillsSidebarScript(): string {
 
             const grouped = groupBy(items, s => s.level + '|' + s.mode);
             const order = [
+                'project|universal',
                 'project|cursor',
                 'project|claude',
                 'project|codex',
                 'project|gemini',
                 'project|opencode',
                 'project|agent',
+                'user|universal',
                 'user|cursor',
                 'user|claude',
                 'user|codex',
@@ -81,12 +83,14 @@ export function getSkillsSidebarScript(): string {
                 'user|agent'
             ];
             const labels = {
+                'project|universal': 'Project / Universal (.agents)',
                 'project|cursor': 'Project / Cursor',
                 'project|claude': 'Project / Claude', 
                 'project|codex': 'Project / Codex',
                 'project|gemini': 'Project / Gemini CLI',
                 'project|opencode': 'Project / OpenCode',
                 'project|agent': 'Project / Antigravity',
+                'user|universal': 'User / Universal (~/.agents)',
                 'user|cursor': 'User / Cursor',
                 'user|claude': 'User / Claude',
                 'user|codex': 'User / Codex',

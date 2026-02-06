@@ -166,12 +166,12 @@ export class SkillInstaller {
 
     private async promptForModes(): Promise<CompatibilityMode[] | undefined> {
         const items: vscode.QuickPickItem[] = [
-            { label: 'Antigravity', description: '.agent/skills/' },
+            { label: 'Antigravity', description: '.agent/skills/ (project) or ~/.gemini/antigravity/skills (global)' },
             { label: 'Claude Code', description: '.claude/skills/' },
-            { label: 'Codex', description: '.codex/skills/' },
+            { label: 'Codex', description: '.agents/skills/ (project) or ~/.codex/skills (global)' },
             { label: 'Cursor', description: '.cursor/skills/' },
-            { label: 'Gemini CLI', description: '.gemini/skills/' },
-            { label: 'OpenCode', description: '.opencode/skills/' }
+            { label: 'Gemini CLI', description: '.agents/skills/ (project) or ~/.gemini/skills (global)' },
+            { label: 'OpenCode', description: '.agents/skills/ (project) or ~/.config/opencode/skills (global)' }
         ];
 
         const modeMap: Record<string, CompatibilityMode | undefined> = {
@@ -270,7 +270,7 @@ export class SkillInstaller {
     }
 
     private async runInstall(options: InstallOptions, enableTelemetry: boolean = false): Promise<boolean> {
-        const args = ['add-skill', options.repo];
+        const args = ['-y', 'skills', 'add', options.repo];
 
         if (options.skillName) {
             args.push('--skill', options.skillName);
@@ -294,7 +294,7 @@ export class SkillInstaller {
     }
 
     private async runInstallMany(options: InstallMultipleOptions): Promise<boolean> {
-        const args = ['add-skill', options.repo];
+        const args = ['-y', 'skills', 'add', options.repo];
 
         if (options.skillName) {
             args.push('--skill', options.skillName);
@@ -332,7 +332,8 @@ export class SkillInstaller {
             () => new Promise((resolve) => {
                 const env = { ...process.env };
                 if (!enableTelemetry) {
-                    env.SKILLS_NO_TELEMETRY = '1';
+                    env.DISABLE_TELEMETRY = '1';
+                    env.DO_NOT_TRACK = '1';
                 }
 
                 const child = spawn('npx', args, { cwd, shell: true, env });

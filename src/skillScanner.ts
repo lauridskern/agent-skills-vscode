@@ -160,7 +160,7 @@ export function groupSkillsByLevelAndMode(skills: Skill[]): Map<SkillLevel, Map<
     const grouped = new Map<SkillLevel, Map<CompatibilityMode, Skill[]>>();
 
     const levels: SkillLevel[] = ['project', 'user'];
-    const modes: CompatibilityMode[] = ['cursor', 'claude', 'codex', 'gemini', 'opencode', 'agent'];
+    const modes: CompatibilityMode[] = ['universal', 'cursor', 'claude', 'codex', 'gemini', 'opencode', 'agent'];
 
     for (const level of levels) {
         const modeMap = new Map<CompatibilityMode, Skill[]>();
