@@ -6,11 +6,12 @@ export interface MarketplaceSkill {
   source: string;
 }
 
-export interface RawRscSkill {
-  source: string;
+export interface RawAllTimeSkill {
+  id?: string;
   skillId: string;
   name: string;
   installs: number;
+  source: string;
 }
 
 export interface SkillsSearchResponse {

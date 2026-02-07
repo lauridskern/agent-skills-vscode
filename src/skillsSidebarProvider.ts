@@ -6,7 +6,7 @@ import * as zlib from "zlib";
 import { SkillInstaller } from "./skillInstaller";
 import { scanAllSkills } from "./skillScanner";
 import { Skill, SkillLevel, CompatibilityMode } from "./types";
-import { MarketplaceSkill, RawRscSkill, SkillsSearchResponse } from "./skillsMarketplaceTypes";
+import { MarketplaceSkill, RawAllTimeSkill, SkillsSearchResponse } from "./skillsMarketplaceTypes";
 import { WebviewState } from "./skillsSidebarState";
 import { buildSkillsSidebarHtml } from "./webview/skillsSidebarTemplate";
 
@@ -27,7 +27,6 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   private _installer: SkillInstaller;
   private _installedSkills: Skill[] = [];
   private _marketplaceSkills: MarketplaceSkill[] = [];
-  private _allMarketplaceSkills: MarketplaceSkill[] = [];
   private _isLoadingMarketplace = false;
   private _isLoadingMore = false;
   private _marketplaceError: string | null = null;
@@ -45,6 +44,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   private _searchRequestId = 0;
   private _browseRequestId = 0;
   private static readonly PAGE_SIZE = 50;
+  private static readonly ALL_TIME_ENDPOINT = "https://skills.sh/api/skills/all-time";
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -147,8 +147,9 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     if (cachedMarketplace?.data?.skills) {
       const skills = cachedMarketplace.data.skills;
       const hasMore = cachedMarketplace.data.hasMore;
-      this._applyBrowseState(skills, hasMore, skills.length);
-      this._updateBrowseCache(skills, hasMore, skills.length);
+      const page = Math.max(1, Math.ceil(skills.length / SkillsSidebarProvider.PAGE_SIZE));
+      this._applyBrowseState(skills, hasMore, page);
+      this._updateBrowseCache(skills, hasMore, page);
     }
   }
 
@@ -192,20 +193,18 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     const requestId = ++this._browseRequestId;
 
     try {
-      const allSkills = await this._fetchSkillsFromRsc();
+      const allSkills = await this._fetchAllTimeSkillsPage(1);
       if (requestId !== this._browseRequestId) return;
-      
-      this._allMarketplaceSkills = allSkills;
 
       const nextSkills = allSkills;
-      const nextHasMore = false;
-      const nextOffset = allSkills.length;
+      const nextHasMore = allSkills.length >= SkillsSidebarProvider.PAGE_SIZE;
+      const nextPage = 1;
 
-      this._updateBrowseCache(nextSkills, nextHasMore, nextOffset);
+      this._updateBrowseCache(nextSkills, nextHasMore, nextPage);
 
       const shouldApplyNow = this._shouldApplyBrowseNow();
       if (shouldApplyNow) {
-        this._applyBrowseState(nextSkills, nextHasMore, nextOffset);
+        this._applyBrowseState(nextSkills, nextHasMore, nextPage);
       }
       
       if (shouldApplyNow && this._marketplaceSkills.length === 0) {
@@ -281,8 +280,44 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _loadMoreSkills() {
-    // All skills are loaded at once from the RSC response, no pagination needed
-    return;
+    if (this._isSearching || this._isLoadingMore || this._isLoadingMarketplace || !this._hasMore) {
+      return;
+    }
+
+    const requestId = this._browseRequestId;
+    this._isLoadingMore = true;
+    this._updateWebview();
+
+    try {
+      const nextPage = this._currentOffset + 1;
+      const pageSkills = await this._fetchAllTimeSkillsPage(nextPage);
+
+      if (requestId !== this._browseRequestId || this._isSearching) {
+        return;
+      }
+
+      if (pageSkills.length === 0) {
+        this._hasMore = false;
+      } else {
+        const merged = [...this._marketplaceSkills, ...pageSkills];
+        const deduped = merged.filter((skill, index, arr) =>
+          arr.findIndex((s) => s.id === skill.id) === index
+        );
+        this._marketplaceSkills = deduped;
+        this._currentOffset = nextPage;
+        this._hasMore = pageSkills.length >= SkillsSidebarProvider.PAGE_SIZE;
+        this._updateBrowseCache(this._marketplaceSkills, this._hasMore, this._currentOffset);
+        this._context.globalState.update(CACHE_KEY_MARKETPLACE, {
+          data: { skills: this._marketplaceSkills, hasMore: this._hasMore },
+          timestamp: Date.now()
+        } as CachedData<{ skills: MarketplaceSkill[]; hasMore: boolean }>);
+      }
+    } catch (error: any) {
+      this._marketplaceError = `Failed to load more: ${error?.message || error}`;
+    } finally {
+      this._isLoadingMore = false;
+      this._updateWebview();
+    }
   }
 
   private _httpGet(url: string, accept = "text/html,application/xhtml+xml", extraHeaders: Record<string, string> = {}): Promise<string> {
@@ -344,24 +379,16 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     return JSON.parse(response) as T;
   }
 
-  private async _fetchSkillsFromRsc(): Promise<MarketplaceSkill[]> {
-    const rscResponse = await this._httpGet(
-      "https://skills.sh/",
-      "text/x-component",
-      { "RSC": "1", "Next-Router-State-Tree": "%5B%22%22%5D" }
-    );
-    // Extract the JSON array of skills from the RSC payload
-    const match = rscResponse.match(/\[{"source":"[^\]]*}\]/);
-    if (!match) {
-      throw new Error("Could not parse skills from response");
-    }
-    const rawSkills: RawRscSkill[] = JSON.parse(match[0]);
-    return rawSkills.map((s) => ({
-      id: `${s.source}/${s.skillId}`,
-      skillId: s.skillId,
-      name: s.name,
-      installs: s.installs,
-      source: s.source,
+  private async _fetchAllTimeSkillsPage(page: number): Promise<MarketplaceSkill[]> {
+    const url = `${SkillsSidebarProvider.ALL_TIME_ENDPOINT}/${page}`;
+    const payload = await this._httpGetJson<RawAllTimeSkill[] | { skills: RawAllTimeSkill[] }>(url);
+    const rawSkills = Array.isArray(payload) ? payload : payload.skills;
+    return rawSkills.map((skill) => ({
+      id: skill.id || `${skill.source}/${skill.skillId}`,
+      skillId: skill.skillId,
+      name: skill.name,
+      installs: skill.installs,
+      source: skill.source,
     }));
   }
 
