@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
-import * as fs from "fs";
 import * as https from "https";
-import * as path from "path";
 import * as zlib from "zlib";
+import * as fs from "fs";
+import * as path from "path";
+import { spawn } from "child_process";
 import { SkillInstaller } from "./skillInstaller";
 import { scanAllSkills } from "./skillScanner";
 import { Skill, SkillLevel, CompatibilityMode } from "./types";
@@ -13,6 +14,13 @@ import { buildSkillsSidebarHtml } from "./webview/skillsSidebarTemplate";
 interface CachedData<T> {
   data: T;
   timestamp: number;
+}
+
+interface CachedMarketplaceData {
+  skills: MarketplaceSkill[];
+  hasMore: boolean;
+  pageBase: number;
+  version: number;
 }
 
 const CACHE_KEY_MARKETPLACE = "cachedMarketplaceSkills";
@@ -43,8 +51,13 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   private _lastBrowseOffset = 0;
   private _searchRequestId = 0;
   private _browseRequestId = 0;
+  private _isCheckingUpdates = false;
+  private _skillsWithUpdates = new Set<string>();
+  private _isUpdatingAllSkills = false;
   private static readonly PAGE_SIZE = 50;
   private static readonly ALL_TIME_ENDPOINT = "https://skills.sh/api/skills/all-time";
+  private static readonly FIRST_PAGE = 0;
+  private static readonly MARKETPLACE_CACHE_VERSION = 2;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -68,11 +81,15 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     };
 
     this._loadFromCache();
+    this._updateInstalledPanelContext();
     this._webviewReady = false;
     webviewView.webview.html = this._getHtmlContent(webviewView.webview);
     
     this._refreshInstalledSkills().then(() => {
       this._updateWebview();
+      if (this._activePanel === "installed") {
+        void this._checkForUpdates();
+      }
     });
     this._fetchMarketplaceSkills();
 
@@ -80,6 +97,9 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       if (webviewView.visible) {
         this._refreshInstalledSkills().then(() => {
           this._updateWebview();
+          if (this._activePanel === "installed") {
+            void this._checkForUpdates();
+          }
         });
       }
     });
@@ -93,7 +113,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
           this._openSkill(message.path);
           break;
         case "deleteSkill":
-          await this._deleteSkill(message.path, message.name);
+          await this._deleteSkill(message.path, message.name, message.level, message.mode);
           break;
         case "refresh":
           await this._refreshInstalledSkills();
@@ -111,11 +131,21 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         case "search":
           await this._handleSearch(message.query);
           break;
+        case "checkUpdates":
+          await this._checkForUpdates();
+          break;
+        case "updateAllSkills":
+          await this._updateAllSkills();
+          break;
         case "loadMore":
           await this._loadMoreSkills();
           break;
         case "setActivePanel":
           this._activePanel = message.panel;
+          this._updateInstalledPanelContext();
+          if (this._activePanel === "installed") {
+            void this._checkForUpdates();
+          }
           break;
         case "webviewReady":
           this._webviewReady = true;
@@ -137,17 +167,35 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     this._updateWebview();
   }
 
+  public async checkForUpdates() {
+    await this._checkForUpdates(true);
+  }
+
+  public async updateAllSkills() {
+    await this._updateAllSkills();
+  }
+
   private _loadFromCache() {
     const cachedInstalled = this._context.globalState.get<CachedData<Skill[]>>(CACHE_KEY_INSTALLED);
     if (cachedInstalled?.data) {
       this._installedSkills = cachedInstalled.data;
     }
 
-    const cachedMarketplace = this._context.globalState.get<CachedData<{ skills: MarketplaceSkill[]; hasMore: boolean }>>(CACHE_KEY_MARKETPLACE);
+    const cachedMarketplace = this._context.globalState.get<CachedData<CachedMarketplaceData>>(CACHE_KEY_MARKETPLACE);
     if (cachedMarketplace?.data?.skills) {
+      const isCompatibleCache =
+        cachedMarketplace.data.version === SkillsSidebarProvider.MARKETPLACE_CACHE_VERSION &&
+        cachedMarketplace.data.pageBase === SkillsSidebarProvider.FIRST_PAGE;
+      if (!isCompatibleCache) {
+        void this._context.globalState.update(CACHE_KEY_MARKETPLACE, undefined);
+        return;
+      }
       const skills = cachedMarketplace.data.skills;
       const hasMore = cachedMarketplace.data.hasMore;
-      const page = Math.max(1, Math.ceil(skills.length / SkillsSidebarProvider.PAGE_SIZE));
+      const page = Math.max(
+        SkillsSidebarProvider.FIRST_PAGE,
+        Math.ceil(skills.length / SkillsSidebarProvider.PAGE_SIZE) - 1,
+      );
       this._applyBrowseState(skills, hasMore, page);
       this._updateBrowseCache(skills, hasMore, page);
     }
@@ -159,8 +207,15 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     const idMapping = this._context.globalState.get<Record<string, string>>(CACHE_KEY_SKILL_SOURCES, {});
     this._installedSkills = skills.map(skill => ({
       ...skill,
-      marketplaceId: idMapping[skill.name]
+      marketplaceId: idMapping[skill.name],
+      updateAvailable: this._skillsWithUpdates.has(skill.name)
     }));
+
+    if (this._installedSkills.length === 0 && this._activePanel === "installed") {
+      this._activePanel = "marketplace";
+      this._updateInstalledPanelContext();
+    }
+
     this._context.globalState.update(CACHE_KEY_INSTALLED, {
       data: this._installedSkills,
       timestamp: Date.now()
@@ -171,10 +226,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     if (this._isLoadingMarketplace) return;
     
     if (!forceRefresh) {
-      const cached = this._context.globalState.get<CachedData<{ skills: MarketplaceSkill[]; hasMore: boolean }>>(CACHE_KEY_MARKETPLACE);
+      const cached = this._context.globalState.get<CachedData<CachedMarketplaceData>>(CACHE_KEY_MARKETPLACE);
       const isCacheValid = cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS;
+      const isCompatibleCache = cached?.data?.version === SkillsSidebarProvider.MARKETPLACE_CACHE_VERSION
+        && cached.data.pageBase === SkillsSidebarProvider.FIRST_PAGE;
       
-      if (isCacheValid && this._marketplaceSkills.length > 0) {
+      if (isCacheValid && isCompatibleCache && this._marketplaceSkills.length > 0) {
         this._hasMore = cached.data.hasMore;
         this._isLoadingMarketplace = false;
         return;
@@ -185,7 +242,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     if (shouldApplyAtStart) {
       this._isLoadingMarketplace = true;
       this._marketplaceError = null;
-      this._currentOffset = 0;
+      this._currentOffset = SkillsSidebarProvider.FIRST_PAGE;
       if (this._marketplaceSkills.length === 0) {
         this._updateWebview();
       }
@@ -193,12 +250,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     const requestId = ++this._browseRequestId;
 
     try {
-      const allSkills = await this._fetchAllTimeSkillsPage(1);
+      const allSkills = await this._fetchAllTimeSkillsPage(SkillsSidebarProvider.FIRST_PAGE);
       if (requestId !== this._browseRequestId) return;
 
       const nextSkills = allSkills;
       const nextHasMore = allSkills.length >= SkillsSidebarProvider.PAGE_SIZE;
-      const nextPage = 1;
+      const nextPage = SkillsSidebarProvider.FIRST_PAGE;
 
       this._updateBrowseCache(nextSkills, nextHasMore, nextPage);
 
@@ -211,9 +268,14 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         this._marketplaceError = "No skills found in response. Try refreshing.";
       } else {
         this._context.globalState.update(CACHE_KEY_MARKETPLACE, {
-          data: { skills: nextSkills, hasMore: nextHasMore },
+          data: {
+            skills: nextSkills,
+            hasMore: nextHasMore,
+            pageBase: SkillsSidebarProvider.FIRST_PAGE,
+            version: SkillsSidebarProvider.MARKETPLACE_CACHE_VERSION,
+          },
           timestamp: Date.now()
-        } as CachedData<{ skills: MarketplaceSkill[]; hasMore: boolean }>);
+        } as CachedData<CachedMarketplaceData>);
       }
     } catch (error: any) {
       if (requestId !== this._browseRequestId) return;
@@ -308,9 +370,14 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         this._hasMore = pageSkills.length >= SkillsSidebarProvider.PAGE_SIZE;
         this._updateBrowseCache(this._marketplaceSkills, this._hasMore, this._currentOffset);
         this._context.globalState.update(CACHE_KEY_MARKETPLACE, {
-          data: { skills: this._marketplaceSkills, hasMore: this._hasMore },
+          data: {
+            skills: this._marketplaceSkills,
+            hasMore: this._hasMore,
+            pageBase: SkillsSidebarProvider.FIRST_PAGE,
+            version: SkillsSidebarProvider.MARKETPLACE_CACHE_VERSION,
+          },
           timestamp: Date.now()
-        } as CachedData<{ skills: MarketplaceSkill[]; hasMore: boolean }>);
+        } as CachedData<CachedMarketplaceData>);
       }
     } catch (error: any) {
       this._marketplaceError = `Failed to load more: ${error?.message || error}`;
@@ -318,6 +385,134 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       this._isLoadingMore = false;
       this._updateWebview();
     }
+  }
+
+  private async _checkForUpdates(showNotifications = false) {
+    if (this._isCheckingUpdates) return;
+    this._isCheckingUpdates = true;
+    this._updateWebview();
+    if (showNotifications) {
+      vscode.window.showInformationMessage("Checking skill updates...");
+    }
+
+    try {
+      const output = await this._runSkillsCheckCommand();
+      const updates = this._parseUpdatesFromCheckOutput(output);
+      this._skillsWithUpdates = updates;
+      this._installedSkills = this._installedSkills.map((skill) => ({
+        ...skill,
+        updateAvailable: updates.has(skill.name),
+      }));
+      this._updateWebview();
+      if (showNotifications) {
+        const count = updates.size;
+        vscode.window.showInformationMessage(
+          count > 0
+            ? `${count} skill update${count === 1 ? "" : "s"} available.`
+            : "All skills are up to date.",
+        );
+      }
+    } catch {
+      // Keep Installed view responsive even if check fails.
+      if (showNotifications) {
+        vscode.window.showErrorMessage("Failed to check skill updates.");
+      }
+    } finally {
+      this._isCheckingUpdates = false;
+      this._updateWebview();
+    }
+  }
+
+  private async _updateAllSkills() {
+    if (this._isUpdatingAllSkills) return;
+    this._isUpdatingAllSkills = true;
+    this._updateWebview();
+    vscode.window.showInformationMessage("Updating all skills...");
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const env = {
+      ...process.env,
+      DISABLE_TELEMETRY: "1",
+      DO_NOT_TRACK: "1",
+    };
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn("npx", ["-y", "skills", "update"], {
+          cwd: workspaceRoot,
+          shell: true,
+          env,
+        });
+
+        child.on("error", reject);
+        child.on("close", (code) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          reject(new Error(`Update failed with code ${code}`));
+        });
+      });
+
+      await this._refreshInstalledSkills();
+      await this._checkForUpdates(false);
+      vscode.window.showInformationMessage("Skills updated.");
+    } catch (error: any) {
+      vscode.window.showErrorMessage(`Failed to update skills: ${error?.message || error}`);
+    } finally {
+      this._isUpdatingAllSkills = false;
+      this._updateWebview();
+    }
+  }
+
+  private _updateInstalledPanelContext() {
+    void vscode.commands.executeCommand(
+      "setContext",
+      "agentSkills.installedPanelActive",
+      this._activePanel === "installed",
+    );
+  }
+
+  private async _runSkillsCheckCommand(): Promise<string> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const env = {
+      ...process.env,
+      DISABLE_TELEMETRY: "1",
+      DO_NOT_TRACK: "1",
+    };
+
+    return new Promise((resolve, reject) => {
+      const child = spawn("npx", ["-y", "skills", "check"], {
+        cwd: workspaceRoot,
+        shell: true,
+        env,
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout?.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      child.on("error", reject);
+      child.on("close", () => {
+        resolve(stdout || stderr);
+      });
+    });
+  }
+
+  private _parseUpdatesFromCheckOutput(output: string): Set<string> {
+    const text = output.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+    const updates = new Set<string>();
+    const matches = text.matchAll(/^\s*↑\s+(.+)$/gm);
+    for (const match of matches) {
+      const name = match[1]?.trim();
+      if (name) updates.add(name);
+    }
+    return updates;
   }
 
   private _httpGet(url: string, accept = "text/html,application/xhtml+xml", extraHeaders: Record<string, string> = {}): Promise<string> {
@@ -533,7 +728,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async _deleteSkill(skillPath: string, name: string) {
+  private async _deleteSkill(
+    skillPath: string,
+    name: string,
+    _selectedLevel?: SkillLevel,
+    _selectedMode?: CompatibilityMode,
+  ) {
     const matching = this._installedSkills.filter((skill) => skill.name === name);
     let confirmLabel = "Delete";
     let removeAll = false;
@@ -569,30 +769,16 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         ? matching.map((skill) => skill.path)
         : [skillPath];
 
-      const deletedTargets = new Set<string>();
-      const resolvedTargets = new Set<string>();
+      const uniquePathsToDelete = [...new Set(pathsToDelete)];
 
-      for (const target of pathsToDelete) {
-        const { targetPath, resolvedTarget } = await this._deleteSkillPath(target);
-        deletedTargets.add(targetPath);
-        if (resolvedTarget) {
-          resolvedTargets.add(resolvedTarget);
-        }
+      for (const target of uniquePathsToDelete) {
+        await this._deleteSkillPath(target);
       }
 
-      if (resolvedTargets.size > 0) {
-        for (const resolvedTarget of resolvedTargets) {
-          const normalizedResolved = path.normalize(resolvedTarget);
-          const normalizedLower = normalizedResolved.toLowerCase();
-          const agentsMarker = `${path.sep}.agents${path.sep}skills${path.sep}`;
-          const shouldDeleteSource = normalizedLower.includes(agentsMarker);
-          if (shouldDeleteSource && !deletedTargets.has(resolvedTarget)) {
-            await fs.promises.rm(resolvedTarget, { recursive: true, force: true });
-          }
-        }
-      }
+      this._skillsWithUpdates.delete(name);
 
       await this._refreshInstalledSkills();
+      await this._checkForUpdates();
       this._updateWebview();
       vscode.window.showInformationMessage(`Skill "${name}" deleted.`);
     } catch (error) {
@@ -600,23 +786,13 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async _deleteSkillPath(skillPath: string): Promise<{ targetPath: string; resolvedTarget?: string }> {
+  private async _deleteSkillPath(skillPath: string): Promise<void> {
     const normalizedPath = path.normalize(skillPath);
     const baseName = path.basename(normalizedPath).toLowerCase();
     const isSkillMarkdown = baseName === "skill.md";
     const targetPath = isSkillMarkdown ? path.dirname(normalizedPath) : normalizedPath;
-    let resolvedTarget: string | undefined;
-
-    try {
-      const stats = await fs.promises.lstat(targetPath);
-      if (stats.isSymbolicLink()) {
-        resolvedTarget = await fs.promises.realpath(targetPath);
-      }
-    } catch {
-    }
 
     await fs.promises.rm(targetPath, { recursive: true, force: true });
-    return { targetPath, resolvedTarget };
   }
 
   private _updateWebview() {

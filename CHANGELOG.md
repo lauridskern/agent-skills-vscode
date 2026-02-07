@@ -2,6 +2,21 @@
 
 All notable changes to the Agent Skills extension will be documented in this file.
 
+## [0.1.14] - 2026-02-07
+
+### Added
+
+- Added quick actions in the Installed tab toolbar to check for updates and update all skills
+- Added update availability indicators in the Installed list
+- Added progress notifications when checking and updating skills
+
+### Changed
+
+- Changed Browse to load from the full all-time skills feed with infinite loading
+- Changed the default tab to Browse when no skills are installed
+- Changed shared install labels to be clearer: `Shared (Codex, Gemini, OpenCode)`
+- Changed remove behavior so deleting from a specific row removes that specific installation, while "Remove all" removes all installations of that skill
+
 ## [0.1.13] - 2026-02-06
 
 ### Fixed
