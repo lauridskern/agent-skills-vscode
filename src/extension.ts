@@ -5,6 +5,7 @@ import { SkillInstaller } from './skillInstaller';
 export function activate(context: vscode.ExtensionContext) {
     const skillInstaller = new SkillInstaller(context);
     const sidebarProvider = new SkillsSidebarProvider(context.extensionUri, skillInstaller, context);
+    void vscode.commands.executeCommand('setContext', 'agentSkills.installedPanelActive', false);
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
@@ -37,6 +38,18 @@ export function activate(context: vscode.ExtensionContext) {
 
             await skillInstaller.installSkill(repoInput);
             sidebarProvider.refresh();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('agentSkills.checkUpdates', async () => {
+            await sidebarProvider.checkForUpdates();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('agentSkills.updateAllSkills', async () => {
+            await sidebarProvider.updateAllSkills();
         })
     );
 }

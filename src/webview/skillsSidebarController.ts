@@ -83,14 +83,14 @@ export function getSkillsSidebarScript(): string {
                 'user|agent'
             ];
             const labels = {
-                'project|universal': 'Project / Universal (.agents)',
+                'project|universal': 'Project / Shared (Codex, Gemini, OpenCode)',
                 'project|cursor': 'Project / Cursor',
                 'project|claude': 'Project / Claude', 
                 'project|codex': 'Project / Codex',
                 'project|gemini': 'Project / Gemini CLI',
                 'project|opencode': 'Project / OpenCode',
                 'project|agent': 'Project / Antigravity',
-                'user|universal': 'User / Universal (~/.agents)',
+                'user|universal': 'User / Shared (Codex, Gemini, OpenCode)',
                 'user|cursor': 'User / Cursor',
                 'user|claude': 'User / Claude',
                 'user|codex': 'User / Codex',
@@ -112,6 +112,10 @@ export function getSkillsSidebarScript(): string {
                 html += '<div class="list-content">';
                 skills.forEach(s => {
                     const updatedDate = s.updatedAt ? new Date(s.updatedAt).toLocaleDateString('de-DE') : '';
+                    let description = esc(s.description || 'No description');
+                    if (s.updateAvailable) {
+                        description += ' · Update available';
+                    }
                     // Match by marketplace id, or fallback to name if no id and no ambiguity
                     const marketplaceMatch = s.marketplaceId 
                         ? marketplace.find(m => m.id === s.marketplaceId)
@@ -121,13 +125,13 @@ export function getSkillsSidebarScript(): string {
                     html += '<div class="list-item" tabindex="0" data-path="' + esc(s.path) + '">' +
                         '<div class="item-content">' +
                             '<div class="item-title title-link" data-path="' + esc(s.path) + '">' + esc(s.name) + '</div>' +
-                            '<div class="item-subtitle">' + esc(s.description || 'No description') + '</div>' +
+                            '<div class="item-subtitle">' + description + '</div>' +
                         '</div>' +
                         '<div class="item-actions">' +
                             (updatedDate ? '<span class="item-meta-top"><span class="codicon codicon-history"></span>' + esc(updatedDate) + '</span>' : '<span></span>') +
                             '<div class="item-buttons">' +
                                 (marketplaceMatch ? '<button class="reinstall-btn install-btn" data-repo="' + esc(marketplaceMatch.source) + '" data-skill="' + esc(s.name) + '">Reinstall</button>' : '') +
-                                '<button class="remove-btn delete-btn" data-path="' + esc(s.path) + '" data-name="' + esc(s.name) + '">Remove</button>' +
+                                '<button class="remove-btn delete-btn" data-path="' + esc(s.path) + '" data-name="' + esc(s.name) + '" data-level="' + esc(s.level) + '" data-mode="' + esc(s.mode) + '">Remove</button>' +
                             '</div>' +
                         '</div>' +
                     '</div>';
@@ -346,7 +350,13 @@ export function getSkillsSidebarScript(): string {
 
             const deleteBtn = e.target.closest('.delete-btn');
             if (deleteBtn) {
-                vscode.postMessage({ command: 'deleteSkill', path: deleteBtn.dataset.path, name: deleteBtn.dataset.name });
+                vscode.postMessage({
+                    command: 'deleteSkill',
+                    path: deleteBtn.dataset.path,
+                    name: deleteBtn.dataset.name,
+                    level: deleteBtn.dataset.level,
+                    mode: deleteBtn.dataset.mode
+                });
                 return;
             }
         });

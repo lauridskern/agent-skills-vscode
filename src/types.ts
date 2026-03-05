@@ -17,6 +17,7 @@ export interface Skill {
     mode: CompatibilityMode;
     updatedAt?: number;
     marketplaceId?: string;
+    updateAvailable?: boolean;
 }
 
 export interface SkillDirectory {

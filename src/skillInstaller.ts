@@ -60,7 +60,11 @@ export class SkillInstaller {
     }
 
     async installWithOptions(options: InstallOptions): Promise<boolean> {
-        return this.runInstall(options);
+        const success = await this.runInstall(options);
+        if (success) {
+            vscode.window.showInformationMessage('Skill installation complete.');
+        }
+        return success;
     }
 
     async installWithOptionsMultiple(options: InstallMultipleOptions): Promise<boolean> {
@@ -81,7 +85,17 @@ export class SkillInstaller {
         }
 
         if (success && options.method === 'copy') {
-            await this.convertSymlinksToCopies(options);
+            try {
+                await this.convertSymlinksToCopies(options);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Copy install failed: ${message}`);
+                return false;
+            }
+        }
+
+        if (success) {
+            vscode.window.showInformationMessage('Skill installation complete.');
         }
 
         return success;
@@ -89,46 +103,66 @@ export class SkillInstaller {
 
     private async convertSymlinksToCopies(options: InstallMultipleOptions): Promise<void> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const homeDir = process.env.HOME || process.env.USERPROFILE || '';
-        const baseDir = options.level === 'project' ? workspaceRoot : homeDir;
-        
-        if (!baseDir) return;
+        const skillDirName = options.skillName || options.repo.split('/').pop();
+        if (!skillDirName) {
+            throw new Error('Could not resolve installed skill name.');
+        }
 
-        const agentsDir = path.join(baseDir, '.agents', 'skills');
-        
+        const dirsToCheck = new Set<string>();
         for (const mode of options.modes) {
+            dirsToCheck.add(getSkillDirectoryPath(options.level, mode, workspaceRoot));
+        }
+
+        const usesSharedAgents = options.modes.some(
+            mode => mode === 'codex' || mode === 'gemini' || mode === 'opencode'
+        );
+        if (usesSharedAgents) {
+            dirsToCheck.add(getSkillDirectoryPath(options.level, 'universal', workspaceRoot));
+        }
+
+        let foundInstallPath = false;
+        for (const skillsDir of dirsToCheck) {
+            const skillPath = path.join(skillsDir, skillDirName);
+            let stats: fs.Stats;
+
             try {
-                const skillsDir = getSkillDirectoryPath(options.level, mode, workspaceRoot);
-                const entries = await fs.promises.readdir(skillsDir, { withFileTypes: true });
-                
-                for (const entry of entries) {
-                    const entryPath = path.join(skillsDir, entry.name);
-                    
-                    try {
-                        const stats = await fs.promises.lstat(entryPath);
-                        if (stats.isSymbolicLink()) {
-                            const targetPath = await fs.promises.readlink(entryPath);
-                            const absoluteTarget = path.isAbsolute(targetPath) 
-                                ? targetPath 
-                                : path.resolve(path.dirname(entryPath), targetPath);
-                            
-                            await fs.promises.rm(entryPath, { force: true });
-                            await this.copyDirectory(absoluteTarget, entryPath);
-                        }
-                    } catch {
-                    }
-                }
+                stats = await fs.promises.lstat(skillPath);
             } catch {
+                continue;
+            }
+
+            foundInstallPath = true;
+
+            if (stats.isSymbolicLink()) {
+                await this.replaceSymlinkWithCopy(skillPath);
+                stats = await fs.promises.lstat(skillPath);
+                if (stats.isSymbolicLink()) {
+                    throw new Error(`Symlink still present after copy conversion at ${skillPath}`);
+                }
             }
         }
 
-        try {
-            const agentsBaseDir = path.join(baseDir, '.agents');
-            if (fs.existsSync(agentsBaseDir)) {
-                await fs.promises.rm(agentsBaseDir, { recursive: true, force: true });
-            }
-        } catch {
+        if (!foundInstallPath) {
+            throw new Error(`Installed skill "${skillDirName}" not found after install.`);
         }
+    }
+
+    private async replaceSymlinkWithCopy(linkPath: string): Promise<void> {
+        const targetPath = await fs.promises.readlink(linkPath);
+        const absoluteTarget = path.isAbsolute(targetPath)
+            ? targetPath
+            : path.resolve(path.dirname(linkPath), targetPath);
+
+        const targetStats = await fs.promises.stat(absoluteTarget);
+        await fs.promises.rm(linkPath, { recursive: true, force: true });
+
+        if (targetStats.isDirectory()) {
+            await this.copyDirectory(absoluteTarget, linkPath);
+            return;
+        }
+
+        await fs.promises.mkdir(path.dirname(linkPath), { recursive: true });
+        await fs.promises.copyFile(absoluteTarget, linkPath);
     }
 
     private async copyDirectory(src: string, dest: string): Promise<void> {
@@ -141,6 +175,17 @@ export class SkillInstaller {
             
             if (entry.isDirectory()) {
                 await this.copyDirectory(srcPath, destPath);
+            } else if (entry.isSymbolicLink()) {
+                const targetPath = await fs.promises.readlink(srcPath);
+                const absoluteTarget = path.isAbsolute(targetPath)
+                    ? targetPath
+                    : path.resolve(path.dirname(srcPath), targetPath);
+                const targetStats = await fs.promises.stat(absoluteTarget);
+                if (targetStats.isDirectory()) {
+                    await this.copyDirectory(absoluteTarget, destPath);
+                } else {
+                    await fs.promises.copyFile(absoluteTarget, destPath);
+                }
             } else {
                 await fs.promises.copyFile(srcPath, destPath);
             }
@@ -352,7 +397,6 @@ export class SkillInstaller {
 
                 child.on('close', (code) => {
                     if (code === 0) {
-                        vscode.window.showInformationMessage('Skill installation complete.');
                         resolve(true);
                         return;
                     }

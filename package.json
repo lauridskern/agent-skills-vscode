@@ -2,7 +2,7 @@
   "name": "agent-skills-sh",
   "displayName": "Agent Skills - Browse, Install & Manage",
   "description": "Browse, install, and manage Agent Skills for AI coding agents like Cursor, Claude Code, Codex, and more",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "publisher": "laurids",
   "license": "MIT",
   "repository": {
@@ -68,6 +68,16 @@
         "command": "agentSkills.installSkill",
         "title": "Install Skill",
         "icon": "$(add)"
+      },
+      {
+        "command": "agentSkills.checkUpdates",
+        "title": "Check Skill Updates",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "agentSkills.updateAllSkills",
+        "title": "Update All Skills",
+        "icon": "$(cloud-download)"
       }
     ],
     "menus": {
@@ -81,6 +91,16 @@
           "command": "agentSkills.installSkill",
           "when": "view == agentSkillsView",
           "group": "navigation"
+        },
+        {
+          "command": "agentSkills.checkUpdates",
+          "when": "view == agentSkillsView && agentSkills.installedPanelActive",
+          "group": "navigation@10"
+        },
+        {
+          "command": "agentSkills.updateAllSkills",
+          "when": "view == agentSkillsView && agentSkills.installedPanelActive",
+          "group": "navigation@11"
         }
       ]
     }
