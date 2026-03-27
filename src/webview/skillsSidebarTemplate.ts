@@ -345,20 +345,6 @@ export function buildSkillsSidebarHtml(
             margin-top: 0;
         }
 
-        .item-tag {
-            display: inline-flex;
-            align-items: center;
-            height: 16px;
-            padding: 0 6px;
-            border-radius: 999px;
-            font-size: 10px;
-            line-height: 16px;
-            border: 1px solid var(--vscode-widget-border);
-            color: var(--vscode-descriptionForeground);
-            background: rgba(127, 127, 127, 0.08);
-            white-space: nowrap;
-        }
-
         .audit-badge {
             display: inline-flex;
             align-items: center;
@@ -578,7 +564,7 @@ export function buildSkillsSidebarHtml(
             display: flex;
             align-items: center;
             margin-top: auto;
-            padding: 1px 10px;
+            padding: 2px 10px;
             font-size: 11px;
             line-height: 1.3;
             color: var(--vscode-descriptionForeground);

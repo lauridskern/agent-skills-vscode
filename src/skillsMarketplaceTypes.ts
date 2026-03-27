@@ -40,7 +40,7 @@ export interface MarketplaceFeedResponse<TSkill = RawMarketplaceSkill> {
 export interface SkillsSearchResponse {
   query: string;
   searchType: string;
-  skills: MarketplaceSkill[];
+  skills: RawMarketplaceSkill[];
   count: number;
   duration_ms: number;
 }

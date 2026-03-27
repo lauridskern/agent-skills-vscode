@@ -337,11 +337,10 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     options: { forceRefresh?: boolean } = {},
   ) {
     const cached = this._browseFeedCache[feed];
-    const isCacheFresh =
-      cached.skills.length > 0 &&
-      (Date.now() - this._marketplaceCacheTimestamp) < CACHE_TTL_MS;
+    const isCacheFresh = this._isFeedCacheFresh(feed);
 
     if (cached.skills.length > 0 && !options.forceRefresh) {
+      this._ensureOfficialSourcesInBackground();
       this._marketplaceError = null;
       this._isLoadingMarketplace = false;
       this._applyBrowseState(cached.skills, cached.hasMore, cached.page);
@@ -776,6 +775,14 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     return this._enrichSkills(skills);
   }
 
+  private _ensureOfficialSourcesInBackground() {
+    void this._ensureOfficialSources()
+      .then(() => {
+        this._updateWebview();
+      })
+      .catch(() => undefined);
+  }
+
   private _enrichSkills(skills: MarketplaceSkill[]): MarketplaceSkill[] {
     return skills.map((skill) => ({
       ...skill,
@@ -1090,7 +1097,8 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
             res.statusCode < 400 &&
             res.headers.location
           ) {
-            this._httpGet(res.headers.location, accept).then(resolve).catch(reject);
+            const redirectedUrl = new URL(res.headers.location, url).toString();
+            this._httpGet(redirectedUrl, accept).then(resolve).catch(reject);
             return;
           }
 
@@ -1411,11 +1419,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private _shouldWarmFeed(feed: MarketplaceFeed) {
-    const cached = this._browseFeedCache[feed];
-    const isCacheFresh =
-      cached.skills.length > 0 &&
-      (Date.now() - this._marketplaceCacheTimestamp) < CACHE_TTL_MS;
-    return !isCacheFresh;
+    return !this._isFeedCacheFresh(feed);
   }
 
   private async _preloadBrowseFeed(feed: MarketplaceFeed) {
@@ -1457,6 +1461,14 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
   private _shouldApplyBrowseNow() {
     return !this._searchQuery.trim();
+  }
+
+  private _isFeedCacheFresh(feed: MarketplaceFeed) {
+    const cached = this._browseFeedCache[feed];
+    return (
+      cached.skills.length > 0 &&
+      (Date.now() - this._marketplaceCacheTimestamp) < CACHE_TTL_MS
+    );
   }
 
   private _getNonce(): string {

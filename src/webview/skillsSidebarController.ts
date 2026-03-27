@@ -252,7 +252,6 @@ export function getSkillsSidebarScript(): string {
                 const skillUrl = 'https://skills.sh/' + esc(s.source) + '/' + esc(s.name);
                 const titleTags = [];
                 const auditTags = [];
-                const auditTitle = s.auditTitle ? ' title="' + esc(s.auditTitle) + '"' : '';
 
                 if (s.official) {
                     titleTags.push(
