@@ -2,6 +2,25 @@
 
 All notable changes to the Agent Skills extension will be documented in this file.
 
+## [0.1.16] - 2026-03-27
+
+### Added
+
+- Added marketplace feed switching for `All time`, `Trending`, and `Hot (24h)` with background preloading after the initial load
+- Added compact security audit badges for `SOCKET`, `SNYK`, and `GEN`, plus verified creator badges for official publishers
+- Added richer install failure logging to the `Agent Skills` output channel
+
+### Changed
+
+- Reworked the Browse layout with a sticky feed toolbar, a sticky `skills.sh` disclaimer footer, and a tighter one-line marketplace metadata row
+- Improved marketplace caching and search state handling across feed switches and webview restores
+
+### Fixed
+
+- Made audit enrichment more reliable for later-loaded skills by combining bulk audit crawling with per-skill fallback fetches
+- Improved install error messages so failed CLI runs surface clearer, less noisy feedback
+- Fixed several Browse layout issues around wrapping, footer sizing, and audit badge alignment
+
 ## [0.1.14] - 2026-02-07
 
 ### Added
