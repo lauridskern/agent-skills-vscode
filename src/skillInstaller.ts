@@ -24,9 +24,12 @@ export interface InstallMultipleOptions {
 
 export class SkillInstaller {
     private readonly _context: vscode.ExtensionContext;
+    private readonly _outputChannel: vscode.OutputChannel;
 
     constructor(context: vscode.ExtensionContext) {
         this._context = context;
+        this._outputChannel = vscode.window.createOutputChannel('Agent Skills');
+        this._context.subscriptions.push(this._outputChannel);
     }
     async installSkill(repo: string, skillName?: string): Promise<boolean> {
         const modes = await this.promptForModes();
@@ -375,6 +378,7 @@ export class SkillInstaller {
                 cancellable: false
             },
             () => new Promise((resolve) => {
+                const command = ['npx', ...args].join(' ');
                 const env = { ...process.env };
                 if (!enableTelemetry) {
                     env.DISABLE_TELEMETRY = '1';
@@ -382,7 +386,20 @@ export class SkillInstaller {
                 }
 
                 const child = spawn('npx', args, { cwd, shell: true, env });
+                let stdout = '';
                 let stderr = '';
+
+                this._appendInstallLog([
+                    `[${new Date().toISOString()}] ${message}`,
+                    `Command: ${command}`,
+                    `CWD: ${cwd || process.cwd()}`
+                ]);
+
+                if (child.stdout) {
+                    child.stdout.on('data', (data) => {
+                        stdout += data.toString();
+                    });
+                }
 
                 if (child.stderr) {
                     child.stderr.on('data', (data) => {
@@ -391,23 +408,106 @@ export class SkillInstaller {
                 }
 
                 child.on('error', (error) => {
-                    vscode.window.showErrorMessage(`Install failed: ${error.message}`);
+                    this._appendInstallLog([
+                        'Spawn error:',
+                        error.message,
+                        ''
+                    ]);
+                    vscode.window.showErrorMessage(`Install failed: ${error.message}. See "Agent Skills" output for details.`);
                     resolve(false);
                 });
 
                 child.on('close', (code) => {
+                    this._appendInstallLog([
+                        `Exit code: ${code ?? 'null'}`,
+                        '--- stdout ---',
+                        stdout || '(empty)',
+                        '--- stderr ---',
+                        stderr || '(empty)',
+                        ''
+                    ]);
+
                     if (code === 0) {
                         resolve(true);
                         return;
                     }
 
-                    const detail = stderr.trim();
                     vscode.window.showErrorMessage(
-                        detail ? `Install failed: ${detail}` : `Install failed with code ${code}`
+                        this._buildInstallErrorMessage(code, stdout, stderr)
                     );
                     resolve(false);
                 });
             })
         );
+    }
+
+    private _buildInstallErrorMessage(code: number | null, stdout: string, stderr: string): string {
+        const combined = this._sanitizeCliOutput([stdout, stderr].filter(Boolean).join('\n'));
+        const lines = combined
+            .split('\n')
+            .map((line) => this._normalizeCliLine(line))
+            .filter(Boolean);
+
+        const nonNoiseLines = lines.filter((line) => !this._isIgnorableCliLine(line));
+        const actionableLines = nonNoiseLines.filter((line) => !/^npm (warn|notice)\b/i.test(line));
+
+        const strongLine = actionableLines.find((line) =>
+            /^(error|failed)\b/i.test(line) ||
+            /no matching skills found/i.test(line) ||
+            /missing required argument/i.test(line) ||
+            /not found/i.test(line) ||
+            /invalid/i.test(line)
+        );
+
+        const detail = (strongLine || actionableLines[actionableLines.length - 1] || '').replace(/^error[:\s-]*/i, '').trim();
+        if (detail) {
+            return `Install failed: ${detail}. See "Agent Skills" output for details.`;
+        }
+
+        if (typeof code === 'number') {
+            return `Install failed with code ${code}. See "Agent Skills" output for details.`;
+        }
+
+        return 'Install failed. See "Agent Skills" output for details.';
+    }
+
+    private _sanitizeCliOutput(text: string): string {
+        return text
+            .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+            .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+            .replace(/\r/g, '\n');
+    }
+
+    private _normalizeCliLine(line: string): string {
+        return line
+            .replace(/^\s*[│┌└├╭╰─]+\s*/g, '')
+            .replace(/^\s*[◇●◒◐◓◑■]\s*/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    private _isIgnorableCliLine(line: string): boolean {
+        if (!line) {
+            return true;
+        }
+
+        return (
+            /^skills$/i.test(line) ||
+            /^tip:/i.test(line) ||
+            /^installation summary/i.test(line) ||
+            /^security risk assessments/i.test(line) ||
+            /^installed \d+ skill/i.test(line) ||
+            /^review skills before use/i.test(line) ||
+            /^[█╗╔╚╝═]+$/i.test(line) ||
+            /^source:\s+/i.test(line) ||
+            /^found \d+ skills$/i.test(line) ||
+            /^selected \d+ skill/i.test(line) ||
+            /^available skills$/i.test(line) ||
+            /^done! /i.test(line)
+        );
+    }
+
+    private _appendInstallLog(lines: string[]): void {
+        this._outputChannel.appendLine(lines.join('\n'));
     }
 }

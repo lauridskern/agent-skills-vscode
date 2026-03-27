@@ -18,6 +18,7 @@ export function getSkillsSidebarScript(): string {
             marketplace: state.scroll?.marketplace ?? persistedState.scroll?.marketplace ?? 0
         };
         let localSearchQuery = persistedState.search?.query ?? state.searchQuery ?? '';
+        let activeMarketplaceFeed = state.activeMarketplaceFeed || persistedState.marketplaceFeed || 'all-time';
         let installed = state.installedSkills || [];
         let marketplace = state.marketplaceSkills || [];
         let isLoading = Boolean(state.isLoadingMarketplace);
@@ -41,6 +42,50 @@ export function getSkillsSidebarScript(): string {
             if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
             if (num >= 1000) return (num / 1000).toFixed(1).replace(/\\.0$/, '') + 'K';
             return String(num);
+        }
+
+        function formatPercent(num) {
+            if (typeof num !== 'number') return '';
+            return Math.round(num * 100) + '%';
+        }
+
+        function formatDelta(num) {
+            if (typeof num !== 'number' || num === 0) return '';
+            return (num > 0 ? '+' : '') + num;
+        }
+
+        function getSocketTone(score) {
+            if (typeof score !== 'number') return { tone: 'neutral', level: 0 };
+            if (score >= 0.8) return { tone: 'good', level: 1 };
+            if (score >= 0.55) return { tone: 'warn', level: 2 };
+            return { tone: 'bad', level: 3 };
+        }
+
+        function getRiskTone(value) {
+            const normalized = String(value || '').toLowerCase();
+            if (!normalized) return { tone: 'neutral', level: 0 };
+            if (normalized.includes('safe') || normalized.includes('low') || normalized.includes('none') || normalized.includes('zero') || normalized === '0 alerts') {
+                return { tone: 'good', level: 1 };
+            }
+            if (normalized.includes('med') || normalized.includes('moderate')) {
+                return { tone: 'warn', level: 2 };
+            }
+            if (normalized.includes('high') || normalized.includes('critical') || normalized.includes('alert') || normalized.includes('risk')) {
+                return { tone: 'bad', level: 3 };
+            }
+            return { tone: 'neutral', level: 0 };
+        }
+
+        function makeAuditBadge(label, toneInfo, title) {
+            const titleAttr = title ? ' title="' + esc(title) + '"' : '';
+            const tone = toneInfo?.tone || 'neutral';
+            const level = typeof toneInfo?.level === 'number' ? toneInfo.level : 0;
+            return '<span class="audit-badge audit-' + tone + '" data-level="' + level + '"' + titleAttr + '>' +
+                '<span class="audit-bars" aria-hidden="true">' +
+                    '<span></span><span></span><span></span>' +
+                '</span>' +
+                '<span class="audit-label">' + label + '</span>' +
+            '</span>';
         }
 
         function groupBy(arr, keyFn) {
@@ -143,13 +188,32 @@ export function getSkillsSidebarScript(): string {
         }
 
         function renderMarketplace() {
+            const feedLabels = {
+                'all-time': 'All time',
+                trending: 'Trending',
+                hot: 'Hot (24h)'
+            };
+
+            const toolbar = '<div class="marketplace-toolbar">' +
+                    '<div class="feed-selector">' +
+                        Object.keys(feedLabels).map(feed => {
+                            const activeClass = feed === activeMarketplaceFeed ? ' active' : '';
+                            return '<button class="feed-btn' + activeClass + '" data-feed="' + feed + '">' + feedLabels[feed] + '</button>';
+                        }).join('') +
+                    '</div>' +
+                    (localSearchQuery.trim()
+                        ? '<div class="marketplace-hint">Search spans the full catalog. Feed selection applies when the query is cleared.</div>'
+                        : '') +
+                '</div>';
+            const footer = '<div class="marketplace-disclaimer">Data provided by&nbsp;<a href="#" class="disclaimer-link" data-url="https://skills.sh">skills.sh</a>, an open directory by Vercel</div>';
+
             if (isLoading && marketplace.length === 0) {
-                marketplaceList.innerHTML = '<div class="loading">Loading skills...</div>';
+                marketplaceList.innerHTML = toolbar + '<div class="loading">Loading skills...</div>' + footer;
                 return;
             }
 
             if (loadError && marketplace.length === 0) {
-                marketplaceList.innerHTML = '<div class="empty-state">' + esc(loadError) + '<br><br><a href="#" class="retry-link">Try again</a></div>';
+                marketplaceList.innerHTML = toolbar + '<div class="empty-state">' + esc(loadError) + '<br><br><a href="#" class="retry-link">Try again</a></div>' + footer;
                 const retryLink = marketplaceList.querySelector('.retry-link');
                 if (retryLink) {
                     retryLink.addEventListener('click', (e) => {
@@ -163,26 +227,22 @@ export function getSkillsSidebarScript(): string {
             const items = marketplace;
 
             if (items.length === 0) {
-                marketplaceList.innerHTML = '<div class="empty-state">' + 
-                    (localSearchQuery ? 'No matching skills found.' : 'No skills available.') + 
-                '</div>';
+                marketplaceList.innerHTML = toolbar + '<div class="empty-state">' +
+                    (localSearchQuery ? 'No matching skills found.' : 'No skills available.') +
+                '</div>' + footer;
                 return;
             }
 
-            // Build a set of installed marketplace ids for fast lookup
             const installedIds = new Set(installed.map(s => s.marketplaceId).filter(Boolean));
-            // Also track installed names for fallback when no marketplaceId
             const installedNames = new Set(installed.filter(s => !s.marketplaceId).map(s => s.name));
 
-            // Count marketplace skills by name to detect duplicates (for fallback matching)
             const marketplaceNameCount = new Map();
             items.forEach(s => {
                 marketplaceNameCount.set(s.name, (marketplaceNameCount.get(s.name) || 0) + 1);
             });
 
-            let html = '<div class="marketplace-disclaimer">Data provided by <a href="#" class="disclaimer-link" data-url="https://skills.sh">skills.sh</a>, an open directory by Vercel</div>';
+            let html = toolbar;
             items.forEach(s => {
-                // Match by marketplace id, or fallback to name if no id and no ambiguity
                 const hasIdMatch = installedIds.has(s.id);
                 const hasFallbackMatch = installedNames.has(s.name) && marketplaceNameCount.get(s.name) === 1;
                 const isInstalled = hasIdMatch || hasFallbackMatch;
@@ -190,17 +250,53 @@ export function getSkillsSidebarScript(): string {
                 const btnClass = isInstalled ? 'reinstall-btn install-btn' : 'primary install-btn';
                 const btnLabel = isInstalled ? 'Reinstall' : 'Install';
                 const skillUrl = 'https://skills.sh/' + esc(s.source) + '/' + esc(s.name);
-                html += '<div class="' + rowClass + '" tabindex="0">' +
+                const titleTags = [];
+                const auditTags = [];
+                const auditTitle = s.auditTitle ? ' title="' + esc(s.auditTitle) + '"' : '';
+
+                if (s.official) {
+                    titleTags.push(
+                        '<span class="official-check" title="Verified skill creator" aria-label="Verified skill creator">' +
+                            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">' +
+                                '<path fill-rule="evenodd" d="M16.403 12.652a3 3 0 0 0 0-5.304 3 3 0 0 0-3.75-3.751 3 3 0 0 0-5.305 0 3 3 0 0 0-3.751 3.75 3 3 0 0 0 0 5.305 3 3 0 0 0 3.75 3.751 3 3 0 0 0 5.305 0 3 3 0 0 0 3.751-3.75Zm-2.546-4.46a.75.75 0 0 0-1.214-.883l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z" clip-rule="evenodd"></path>' +
+                            '</svg>' +
+                        '</span>'
+                    );
+                }
+                if (typeof s.socketOverall === 'number') {
+                    auditTags.push(makeAuditBadge('SOCKET', getSocketTone(s.socketOverall), s.auditTitle || 'Socket ' + formatPercent(s.socketOverall)));
+                }
+                if (s.snykRisk) {
+                    auditTags.push(makeAuditBadge('SNYK', getRiskTone(s.snykRisk), s.auditTitle || 'Snyk ' + s.snykRisk));
+                }
+                if (s.geminiVerdict) {
+                    auditTags.push(makeAuditBadge('GEN', getRiskTone(s.geminiVerdict), s.auditTitle || 'Gen ' + s.geminiVerdict));
+                }
+
+                let topMeta = '<span class="item-meta-top">' +
+                    '<span class="codicon codicon-cloud-download"></span>' +
+                    '<span>' + formatInstalls(s.installs) + '</span>' +
+                '</span>';
+
+                if (typeof s.change === 'number' && s.change !== 0) {
+                    topMeta += '<span class="item-meta-pill">' + esc(formatDelta(s.change)) + '</span>';
+                }
+
+                html += '<div class="' + rowClass + ' marketplace-item" tabindex="0">' +
                     '<div class="item-content">' +
-                        '<div class="item-title title-link" data-url="' + esc(skillUrl) + '">' + esc(s.name) + '</div>' +
-                        '<div class="item-subtitle">' + esc(s.source) + '</div>' +
-                    '</div>' +
-                    '<div class="item-actions">' +
-                        '<span class="item-meta-top">' +
-                            '<span class="codicon codicon-cloud-download"></span>' +
-                            '<span>' + formatInstalls(s.installs) + '</span>' +
-                        '</span>' +
-                        '<button class="' + btnClass + '" data-repo="' + esc(s.source) + '" data-skill="' + esc(s.name) + '">' + btnLabel + '</button>' +
+                        '<div class="item-title-row">' +
+                            '<div class="item-title-main">' +
+                                '<div class="item-title title-link" data-url="' + esc(skillUrl) + '">' + esc(s.name) + '</div>' +
+                                (titleTags.length ? '<div class="item-tags title-tags">' + titleTags.join('') + '</div>' : '') +
+                            '</div>' +
+                            '<div class="item-meta-group">' + topMeta + '</div>' +
+                        '</div>' +
+                        '<div class="item-subtitle-row">' +
+                            '<div class="item-subtitle">' + esc(s.source) + '</div>' +
+                            (auditTags.length ? '<div class="item-tags">' + auditTags.join('') + '</div>' : '') +
+                            '<div class="item-subtitle-spacer"></div>' +
+                            '<button class="' + btnClass + '" data-repo="' + esc(s.source) + '" data-skill="' + esc(s.name) + '">' + btnLabel + '</button>' +
+                        '</div>' +
                     '</div>' +
                 '</div>';
             });
@@ -211,6 +307,7 @@ export function getSkillsSidebarScript(): string {
                 '</div>';
             }
 
+            html += footer;
             marketplaceList.innerHTML = html;
             setupInfiniteScroll();
         }
@@ -245,12 +342,17 @@ export function getSkillsSidebarScript(): string {
             hasMore = Boolean(state.hasMore);
             loadError = state.marketplaceError || null;
             activePanel = state.activePanel || activePanel;
+            activeMarketplaceFeed = state.activeMarketplaceFeed || activeMarketplaceFeed;
             const isFocused = document.activeElement === searchInput;
             if (!isFocused) {
                 localSearchQuery = state.searchQuery ?? localSearchQuery;
                 searchInput.value = localSearchQuery;
                 const current = vscode.getState() || {};
-                persistState({ search: { ...(current.search || {}), query: localSearchQuery } });
+                persistState({
+                    search: { ...(current.search || {}), query: localSearchQuery },
+                    marketplaceFeed: activeMarketplaceFeed,
+                    activePanel
+                });
             }
             document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.panel === activePanel));
             document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === activePanel + '-panel'));
@@ -271,7 +373,12 @@ export function getSkillsSidebarScript(): string {
         searchInput.addEventListener('input', e => {
             localSearchQuery = e.target.value;
             const current = vscode.getState() || {};
-            persistState({ search: { ...(current.search || {}), query: localSearchQuery } });
+            persistState({
+                search: { ...(current.search || {}), query: localSearchQuery },
+                marketplaceFeed: activeMarketplaceFeed,
+                activePanel
+            });
+            vscode.postMessage({ command: 'setSearchQuery', query: localSearchQuery });
             
             if (activePanel === 'installed') {
                 render();
@@ -290,9 +397,20 @@ export function getSkillsSidebarScript(): string {
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 activePanel = tab.dataset.panel;
+                if (searchTimeout) clearTimeout(searchTimeout);
                 document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
                 document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === activePanel + '-panel'));
+                persistState({ activePanel, marketplaceFeed: activeMarketplaceFeed });
                 vscode.postMessage({ command: 'setActivePanel', panel: activePanel });
+                if (activePanel === 'marketplace') {
+                    if (localSearchQuery.trim()) {
+                        scrollState.marketplace = 0;
+                        if (marketplacePanel) {
+                            marketplacePanel.scrollTop = 0;
+                        }
+                    }
+                    vscode.postMessage({ command: 'search', query: localSearchQuery });
+                }
                 render();
             });
         });
@@ -339,6 +457,23 @@ export function getSkillsSidebarScript(): string {
             if (disclaimerLink) {
                 e.preventDefault();
                 vscode.postMessage({ command: 'openUrl', url: disclaimerLink.dataset.url });
+                return;
+            }
+
+            const feedBtn = e.target.closest('.feed-btn');
+            if (feedBtn) {
+                const nextFeed = feedBtn.dataset.feed;
+                if (!nextFeed || nextFeed === activeMarketplaceFeed) {
+                    return;
+                }
+                activeMarketplaceFeed = nextFeed;
+                scrollState.marketplace = 0;
+                if (marketplacePanel) {
+                    marketplacePanel.scrollTop = 0;
+                }
+                persistState({ marketplaceFeed: activeMarketplaceFeed, activePanel });
+                vscode.postMessage({ command: 'setMarketplaceFeed', feed: activeMarketplaceFeed });
+                render();
                 return;
             }
             
