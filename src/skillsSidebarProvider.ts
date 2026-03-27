@@ -205,7 +205,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
           vscode.commands.executeCommand('simpleBrowser.show', message.url);
           break;
         case "setSearchQuery":
-          this._searchQuery = message.query || "";
+          this._searchQuery = message.query ?? "";
           break;
         case "search":
           await this._handleSearch(message.query);
@@ -229,7 +229,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         case "setMarketplaceFeed":
           this._activeMarketplaceFeed = message.feed;
           void this._persistMarketplaceCache();
-          if (this._activePanel === "marketplace" && !this._searchQuery.trim()) {
+          if (this._activePanel === "marketplace" && this._searchQuery.trim() === "") {
             await this._showBrowseFeed(this._activeMarketplaceFeed);
           } else {
             this._updateWebview();
@@ -304,7 +304,6 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
   private async _refreshInstalledSkills() {
     const skills = await scanAllSkills();
-    // Merge saved marketplace id for skills
     const idMapping = this._context.globalState.get<Record<string, string>>(CACHE_KEY_SKILL_SOURCES, {});
     this._installedSkills = skills.map(skill => ({
       ...skill,
@@ -324,7 +323,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _refreshMarketplaceView(forceRefresh = false) {
-    if (this._activePanel === "marketplace" && this._searchQuery.trim()) {
+    if (this._activePanel === "marketplace" && this._searchQuery.trim() !== "") {
       await this._handleSearch(this._searchQuery);
       return;
     }
@@ -339,21 +338,21 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     const cached = this._browseFeedCache[feed];
     const isCacheFresh = this._isFeedCacheFresh(feed);
 
-    if (cached.skills.length > 0 && !options.forceRefresh) {
-      this._ensureOfficialSourcesInBackground();
+    if (cached.skills.length > 0 && options.forceRefresh !== true) {
+      void this._ensureOfficialSourcesInBackground();
       this._marketplaceError = null;
       this._isLoadingMarketplace = false;
       this._applyBrowseState(cached.skills, cached.hasMore, cached.page);
       this._updateWebview();
       this._scheduleBackgroundFeedWarmup(feed);
 
-      if (!isCacheFresh) {
+      if (isCacheFresh !== true) {
         void this._fetchMarketplaceSkills({ feed, forceRefresh: true, background: true });
       }
       return;
     }
 
-    if (!options.forceRefresh) {
+    if (options.forceRefresh !== true) {
       const pendingPreload = this._feedPreloadPromises.get(feed);
       if (pendingPreload) {
         this._isLoadingMarketplace = true;
@@ -389,7 +388,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       background?: boolean;
     } = {},
   ) {
-    const feed = options.feed || this._activeMarketplaceFeed;
+    const feed = options.feed ?? this._activeMarketplaceFeed;
     const requestId = ++this._browseRequestId;
     const shouldApplyNow =
       this._shouldApplyBrowseNow() && this._activeMarketplaceFeed === feed;
@@ -426,12 +425,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       }
 
       this._scheduleBackgroundFeedWarmup(feed);
-    } catch (error: any) {
+    } catch (error) {
       if (requestId !== this._browseRequestId) {
         return;
       }
       if (shouldApplyNow && !options.background) {
-        this._marketplaceError = `Failed to load: ${error?.message || error}`;
+        this._marketplaceError = `Failed to load: ${this._getErrorMessage(error)}`;
       }
     } finally {
       if (requestId === this._browseRequestId && shouldApplyNow) {
@@ -441,15 +440,15 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async _handleSearch(query: string) {
-    const nextQuery = String(query || "");
+  private async _handleSearch(query?: string) {
+    const nextQuery = query ?? "";
     const trimmedQuery = nextQuery.trim();
     this._searchQuery = nextQuery;
     this._activePanel = "marketplace";
     this._updateInstalledPanelContext();
     const requestId = ++this._searchRequestId;
 
-    if (!trimmedQuery) {
+    if (trimmedQuery === "") {
       this._isSearching = false;
       this._isLoadingMarketplace = false;
       this._marketplaceError = null;
@@ -480,11 +479,11 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       this._hasMore = false;
       this._currentPage = SkillsSidebarProvider.FIRST_PAGE;
       this._marketplaceError = null;
-    } catch (error: any) {
+    } catch (error) {
       if (requestId !== this._searchRequestId) {
         return;
       }
-      this._marketplaceError = `Search failed: ${error?.message || error}`;
+      this._marketplaceError = `Search failed: ${this._getErrorMessage(error)}`;
     } finally {
       if (requestId === this._searchRequestId) {
         this._isLoadingMarketplace = false;
@@ -498,8 +497,8 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       this._isSearching ||
       this._isLoadingMore ||
       this._isLoadingMarketplace ||
-      !this._hasMore ||
-      this._searchQuery.trim()
+      this._hasMore !== true ||
+      this._searchQuery.trim() !== ""
     ) {
       return;
     }
@@ -548,8 +547,8 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         this._currentPage,
       );
       await this._persistMarketplaceCache();
-    } catch (error: any) {
-      this._marketplaceError = `Failed to load more: ${error?.message || error}`;
+    } catch (error) {
+      this._marketplaceError = `Failed to load more: ${this._getErrorMessage(error)}`;
     } finally {
       this._isLoadingMore = false;
       this._updateWebview();
@@ -582,7 +581,6 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         );
       }
     } catch {
-      // Keep Installed view responsive even if check fails.
       if (showNotifications) {
         vscode.window.showErrorMessage("Failed to check skill updates.");
       }
@@ -625,8 +623,8 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       await this._refreshInstalledSkills();
       await this._checkForUpdates(false);
       vscode.window.showInformationMessage("Skills updated.");
-    } catch (error: any) {
-      vscode.window.showErrorMessage(`Failed to update skills: ${error?.message || error}`);
+    } catch (error) {
+      vscode.window.showErrorMessage(`Failed to update skills: ${this._getErrorMessage(error)}`);
     } finally {
       this._isUpdatingAllSkills = false;
       this._updateWebview();
@@ -668,7 +666,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
       child.on("error", reject);
       child.on("close", () => {
-        resolve(stdout || stderr);
+        resolve(stdout !== "" ? stdout : stderr);
       });
     });
   }
@@ -726,7 +724,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
 
   private _toMarketplaceSkill(skill: RawMarketplaceSkill | MarketplaceSkill): MarketplaceSkill {
     return {
-      id: skill.id || this._makeMarketplaceKey(skill),
+      id: skill.id ?? this._makeMarketplaceKey(skill),
       skillId: skill.skillId,
       name: skill.name,
       installs: skill.installs,
@@ -744,7 +742,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
   private _dedupeMarketplaceSkills(skills: MarketplaceSkill[]): MarketplaceSkill[] {
     const seen = new Set<string>();
     return skills.filter((skill) => {
-      const key = skill.id || this._makeMarketplaceKey(skill);
+      const key = skill.id ?? this._makeMarketplaceKey(skill);
       if (seen.has(key)) {
         return false;
       }
@@ -760,7 +758,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       return skills;
     }
 
-    const officialPromise = this._ensureOfficialSources().catch(() => undefined);
+    const officialPromise = this._loadOfficialSourcesForView();
     await this._bulkEnrichAuditsForSkills(skills);
 
     const missingSkills = skills.filter(
@@ -775,31 +773,41 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     return this._enrichSkills(skills);
   }
 
-  private _ensureOfficialSourcesInBackground() {
-    void this._ensureOfficialSources()
-      .then(() => {
-        this._updateWebview();
-      })
-      .catch(() => undefined);
+  private async _ensureOfficialSourcesInBackground(): Promise<void> {
+    const didLoad = await this._loadOfficialSourcesForView();
+    if (didLoad) {
+      this._updateWebview();
+    }
+  }
+
+  private async _loadOfficialSourcesForView(): Promise<boolean> {
+    try {
+      await this._ensureOfficialSources();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private _enrichSkills(skills: MarketplaceSkill[]): MarketplaceSkill[] {
     return skills.map((skill) => ({
       ...skill,
-      official: skill.official || this._officialSources?.has(skill.source) || false,
+      official:
+        skill.official === true ||
+        this._officialSources?.has(skill.source) === true,
       ...this._auditEnrichments.get(this._makeMarketplaceKey(skill)),
     }));
   }
 
   private _skillHasAuditData(skill: MarketplaceSkill) {
     const enrichment = this._auditEnrichments.get(this._makeMarketplaceKey(skill));
-    return Boolean(
-      enrichment?.socketOverall ??
-        enrichment?.snykRisk ??
-        enrichment?.geminiVerdict ??
-        skill.socketOverall ??
-        skill.snykRisk ??
-        skill.geminiVerdict,
+    return (
+      enrichment?.socketOverall != null ||
+      enrichment?.snykRisk != null ||
+      enrichment?.geminiVerdict != null ||
+      skill.socketOverall != null ||
+      skill.snykRisk != null ||
+      skill.geminiVerdict != null
     );
   }
 
@@ -846,18 +854,26 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
     const results = await Promise.all(
       uniqueSkills.map(async (skill) => ({
         key: this._makeMarketplaceKey(skill),
-        enrichment: await this._fetchSkillPageAuditEnrichment(skill).catch(
-          () => undefined,
-        ),
+        enrichment: await this._tryFetchSkillPageAuditEnrichment(skill),
       })),
     );
 
     for (const { key, enrichment } of results) {
-      if (!enrichment) {
+      if (enrichment == null) {
         continue;
       }
 
       this._auditEnrichments.set(key, enrichment);
+    }
+  }
+
+  private async _tryFetchSkillPageAuditEnrichment(
+    skill: Pick<MarketplaceSkill, "source" | "skillId">,
+  ): Promise<MarketplaceAuditEnrichment | undefined> {
+    try {
+      return await this._fetchSkillPageAuditEnrichment(skill);
+    } catch {
+      return undefined;
     }
   }
 
@@ -900,7 +916,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       "agent-trust-hub",
     );
 
-    if (!socketStatus && !snykStatus && !geminiStatus) {
+    if (socketStatus == null && snykStatus == null && geminiStatus == null) {
       return undefined;
     }
 
@@ -1047,7 +1063,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       return this._officialSources;
     }
 
-    if (!this._officialSourcesPromise) {
+    if (this._officialSourcesPromise == null) {
       this._officialSourcesPromise = this._loadOfficialSources();
     }
 
@@ -1193,7 +1209,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       },
     );
 
-    if (!agentSelection || agentSelection.length === 0) return;
+    if (agentSelection == null || agentSelection.length === 0) return;
 
     const modes = agentSelection
       .map((item) => modeMap[item.label])
@@ -1215,7 +1231,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       title: "Installation scope",
     });
 
-    if (!levelSelection) return;
+    if (levelSelection == null) return;
 
     const level: SkillLevel =
       levelSelection.label === "Project" ? "project" : "user";
@@ -1229,7 +1245,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       title: "Installation method",
     });
 
-    if (!methodSelection) return;
+    if (methodSelection == null) return;
 
     const method = methodSelection.label.startsWith("Symlink") ? "symlink" : "copy";
 
@@ -1243,7 +1259,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       placeHolder: "Telemetry only includes skill name and timestamp—no personal data",
     });
 
-    if (!telemetrySelection) return;
+    if (telemetrySelection == null) return;
 
     const enableTelemetry = telemetrySelection.label === "Yes";
 
@@ -1252,13 +1268,12 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       skillName,
       level,
       modes,
-      method: method as "symlink" | "copy",
+      method,
       enableTelemetry,
     });
 
     if (didInstall) {
-      // Save the marketplace id for this skill (format: source/skillName)
-      const installedSkillName = skillName || repo.split('/').pop() || repo;
+      const installedSkillName = skillName ?? repo.split('/').pop() ?? repo;
       const marketplaceId = `${repo}/${installedSkillName}`;
       await this._saveSkillMarketplaceId(installedSkillName, marketplaceId);
       await this._refreshInstalledSkills();
@@ -1297,7 +1312,7 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
         "No",
       );
 
-      if (!choice) {
+      if (choice == null) {
         return;
       }
 
@@ -1449,7 +1464,6 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
           this._updateWebview();
         }
       } catch {
-        // Ignore warm-cache failures; the tab can still load on demand later.
       } finally {
         this._feedPreloadPromises.delete(feed);
       }
@@ -1469,6 +1483,10 @@ export class SkillsSidebarProvider implements vscode.WebviewViewProvider {
       cached.skills.length > 0 &&
       (Date.now() - this._marketplaceCacheTimestamp) < CACHE_TTL_MS
     );
+  }
+
+  private _getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private _getNonce(): string {

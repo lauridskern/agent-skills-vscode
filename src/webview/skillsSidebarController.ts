@@ -18,13 +18,13 @@ export function getSkillsSidebarScript(): string {
             marketplace: state.scroll?.marketplace ?? persistedState.scroll?.marketplace ?? 0
         };
         let localSearchQuery = persistedState.search?.query ?? state.searchQuery ?? '';
-        let activeMarketplaceFeed = state.activeMarketplaceFeed || persistedState.marketplaceFeed || 'all-time';
-        let installed = state.installedSkills || [];
-        let marketplace = state.marketplaceSkills || [];
+        let activeMarketplaceFeed = state.activeMarketplaceFeed ?? persistedState.marketplaceFeed ?? 'all-time';
+        let installed = state.installedSkills ?? [];
+        let marketplace = state.marketplaceSkills ?? [];
         let isLoading = Boolean(state.isLoadingMarketplace);
         let isLoadingMore = Boolean(state.isLoadingMore);
         let hasMore = Boolean(state.hasMore);
-        let loadError = state.marketplaceError || null;
+        let loadError = state.marketplaceError ?? null;
 
         searchInput.value = localSearchQuery;
 
@@ -62,8 +62,8 @@ export function getSkillsSidebarScript(): string {
         }
 
         function getRiskTone(value) {
-            const normalized = String(value || '').toLowerCase();
-            if (!normalized) return { tone: 'neutral', level: 0 };
+            const normalized = String(value ?? '').toLowerCase();
+            if (normalized === '') return { tone: 'neutral', level: 0 };
             if (normalized.includes('safe') || normalized.includes('low') || normalized.includes('none') || normalized.includes('zero') || normalized === '0 alerts') {
                 return { tone: 'good', level: 1 };
             }
@@ -77,8 +77,8 @@ export function getSkillsSidebarScript(): string {
         }
 
         function makeAuditBadge(label, toneInfo, title) {
-            const titleAttr = title ? ' title="' + esc(title) + '"' : '';
-            const tone = toneInfo?.tone || 'neutral';
+            const titleAttr = title == null || title === '' ? '' : ' title="' + esc(title) + '"';
+            const tone = toneInfo?.tone ?? 'neutral';
             const level = typeof toneInfo?.level === 'number' ? toneInfo.level : 0;
             return '<span class="audit-badge audit-' + tone + '" data-level="' + level + '"' + titleAttr + '>' +
                 '<span class="audit-bars" aria-hidden="true">' +
@@ -147,7 +147,7 @@ export function getSkillsSidebarScript(): string {
             let html = '';
             order.forEach(key => {
                 const skills = grouped[key];
-                if (!skills || skills.length === 0) return;
+                if (skills == null || skills.length === 0) return;
 
                 html += '<div class="list-header" data-group="' + key + '">' +
                     '<span class="arrow codicon codicon-chevron-down"></span>' +
@@ -161,7 +161,6 @@ export function getSkillsSidebarScript(): string {
                     if (s.updateAvailable) {
                         description += ' · Update available';
                     }
-                    // Match by marketplace id, or fallback to name if no id and no ambiguity
                     const marketplaceMatch = s.marketplaceId 
                         ? marketplace.find(m => m.id === s.marketplaceId)
                         : marketplace.filter(m => m.name === s.name).length === 1 
@@ -205,7 +204,7 @@ export function getSkillsSidebarScript(): string {
                         ? '<div class="marketplace-hint">Search spans the full catalog. Feed selection applies when the query is cleared.</div>'
                         : '') +
                 '</div>';
-            const footer = '<div class="marketplace-disclaimer">Data provided by&nbsp;<a href="#" class="disclaimer-link" data-url="https://skills.sh">skills.sh</a>, an open directory by Vercel</div>';
+            const footer = '<div class="marketplace-disclaimer">Data provided by <a href="#" class="disclaimer-link" data-url="https://skills.sh">skills.sh</a>, an open directory by Vercel</div>';
 
             if (isLoading && marketplace.length === 0) {
                 marketplaceList.innerHTML = toolbar + '<div class="loading">Loading skills...</div>' + footer;
@@ -313,7 +312,7 @@ export function getSkillsSidebarScript(): string {
 
         function setupInfiniteScroll() {
             const trigger = document.getElementById('load-more-trigger');
-            if (!trigger || !hasMore) return;
+            if (trigger == null || hasMore !== true) return;
 
             const observer = new IntersectionObserver((entries) => {
                 entries.forEach(entry => {
@@ -332,16 +331,16 @@ export function getSkillsSidebarScript(): string {
         }
 
         function applyState(nextState) {
-            if (!nextState) return;
+            if (nextState == null) return;
             state = nextState;
-            installed = state.installedSkills || [];
-            marketplace = state.marketplaceSkills || [];
+            installed = state.installedSkills ?? [];
+            marketplace = state.marketplaceSkills ?? [];
             isLoading = Boolean(state.isLoadingMarketplace);
             isLoadingMore = Boolean(state.isLoadingMore);
             hasMore = Boolean(state.hasMore);
-            loadError = state.marketplaceError || null;
-            activePanel = state.activePanel || activePanel;
-            activeMarketplaceFeed = state.activeMarketplaceFeed || activeMarketplaceFeed;
+            loadError = state.marketplaceError ?? null;
+            activePanel = state.activePanel ?? activePanel;
+            activeMarketplaceFeed = state.activeMarketplaceFeed ?? activeMarketplaceFeed;
             const isFocused = document.activeElement === searchInput;
             if (!isFocused) {
                 localSearchQuery = state.searchQuery ?? localSearchQuery;
@@ -362,9 +361,9 @@ export function getSkillsSidebarScript(): string {
             else renderMarketplace();
             requestAnimationFrame(() => {
                 if (activePanel === 'installed' && installedPanel) {
-                    installedPanel.scrollTop = scrollState.installed || 0;
+                    installedPanel.scrollTop = scrollState.installed ?? 0;
                 } else if (activePanel === 'marketplace' && marketplacePanel) {
-                    marketplacePanel.scrollTop = scrollState.marketplace || 0;
+                    marketplacePanel.scrollTop = scrollState.marketplace ?? 0;
                 }
             });
         }
@@ -402,7 +401,7 @@ export function getSkillsSidebarScript(): string {
                 persistState({ activePanel, marketplaceFeed: activeMarketplaceFeed });
                 vscode.postMessage({ command: 'setActivePanel', panel: activePanel });
                 if (activePanel === 'marketplace') {
-                    if (localSearchQuery.trim()) {
+                    if (localSearchQuery.trim() !== '') {
                         scrollState.marketplace = 0;
                         if (marketplacePanel) {
                             marketplacePanel.scrollTop = 0;
@@ -462,7 +461,7 @@ export function getSkillsSidebarScript(): string {
             const feedBtn = e.target.closest('.feed-btn');
             if (feedBtn) {
                 const nextFeed = feedBtn.dataset.feed;
-                if (!nextFeed || nextFeed === activeMarketplaceFeed) {
+                if (nextFeed == null || nextFeed === activeMarketplaceFeed) {
                     return;
                 }
                 activeMarketplaceFeed = nextFeed;

@@ -33,7 +33,7 @@ export class SkillInstaller {
     }
     async installSkill(repo: string, skillName?: string): Promise<boolean> {
         const modes = await this.promptForModes();
-        if (!modes || modes.length === 0) {
+        if (modes == null || modes.length === 0) {
             return false;
         }
 
@@ -380,7 +380,7 @@ export class SkillInstaller {
             () => new Promise((resolve) => {
                 const command = ['npx', ...args].join(' ');
                 const env = { ...process.env };
-                if (!enableTelemetry) {
+                if (enableTelemetry !== true) {
                     env.DISABLE_TELEMETRY = '1';
                     env.DO_NOT_TRACK = '1';
                 }
@@ -392,7 +392,7 @@ export class SkillInstaller {
                 this._appendInstallLog([
                     `[${new Date().toISOString()}] ${message}`,
                     `Command: ${command}`,
-                    `CWD: ${cwd || process.cwd()}`
+                    `CWD: ${cwd ?? process.cwd()}`
                 ]);
 
                 if (child.stdout) {
@@ -487,7 +487,7 @@ export class SkillInstaller {
     }
 
     private _isIgnorableCliLine(line: string): boolean {
-        if (!line) {
+        if (line === '') {
             return true;
         }
 
